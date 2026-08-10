@@ -8,6 +8,27 @@ Diffie-Hellman handshake, the encrypted session, TL serialisation, SRP for two-f
 and the client negotiates a session against Telegram's real servers.
 
 
+## Screens
+
+Rendered from the app's own drawing code by `cargo run --example preview`, at 2x. The
+content is `Store::mock()` - invented names and invented messages, not anybody's
+conversation.
+
+| | |
+|---|---|
+| ![Chat list](docs/screenshots/10-chats.png) | ![Conversation](docs/screenshots/12-conversation.png) |
+| The chat list: avatars from initials, unread badges, per-chat time | A transcript: bubbles grouped by sender, a photo, a voice note, delivery ticks |
+| ![Composing](docs/screenshots/14-composing.png) | ![Cyrillic](docs/screenshots/15-cyrillic.png) |
+| Typing into the composer, with the caret and the Send softkey | Cyrillic and Greek, from the same atlases the device uses |
+| ![Login](docs/screenshots/17-login-phone.png) | ![Light palette](docs/screenshots/16-chats-light.png) |
+| The phone-number screen, first of three in the login exchange | The same list in the light palette |
+
+That is a 320x240 screen with no touch input: every one of those is driven by the D-pad,
+the two softkeys and the QWERTY. The rasterizer, the fonts and the layout are all the
+SDK's - see [symbian-gfx and symbian-ui](https://github.com/Lab2021/epoc) - and none of it
+uses an Avkon widget, which is why it looks like this rather than like a 2009 Nokia menu.
+
+
 ## Building
 
 Host tests and the simulator need nothing but the pinned SDK:

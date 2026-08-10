@@ -30,7 +30,7 @@ crate-type = ["staticlib"]
 tg = { path = ".." }
 tg-proto = { path = "../proto" }
 # The SDK, by revision. Keep this in step with the root manifest's pins.
-symbian-app = { git = "ssh://git@github.com/Lab2021/epoc", rev = "7b4c21dbd3d512a8c2ca8cca3a12c83e9b1bd9c1" }
+symbian-app = { git = "ssh://git@github.com/Lab2021/epoc", rev = "901db0c1eb4f1ae053c5a4e24228b5f905342b95" }
 
 # Mirrors the root workspace profile; a separate workspace does not inherit it.
 [profile.release]

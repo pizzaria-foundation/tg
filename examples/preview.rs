@@ -19,7 +19,7 @@ use symbian_preview::{Atlases, Sheet};
 const OUT: &str = "preview-out";
 
 fn main() {
-    let atlases = Atlases::load(&symbian_preview::sdk_root());
+    let atlases = Atlases::load();
     atlases.with_themes(render);
 }
 

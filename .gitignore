@@ -12,5 +12,7 @@ api.conf
 build/
 **/target/
 
-# Contact sheets.
+# The raw 2x output of `cargo run --example preview`, ~900 KB a sheet because the PNG
+# writer uses stored deflate blocks. The curated set under docs/screenshots/ is the same
+# pixels re-encoded with a palette - 6 screens in 69 KB - and that one is committed.
 preview-out/
