@@ -1,13 +1,36 @@
 # tg — the Telegram client
 
-**Repository: [Lab2021/tg](https://github.com/Lab2021/tg). Built on the
-[epoc](https://github.com/Lab2021/epoc) SDK.**
+Built on the [epoc](https://github.com/Lab2021/epoc) SDK, pinned by revision in
+`Cargo.toml`.
 
-While the split is in progress this directory still sits inside the SDK checkout, and the
-path dependencies in `Cargo.toml` point at `../../crates/`. Nothing in the SDK depends on
-anything here — moving this directory and deleting five lines from the SDK's root
-`Cargo.toml` (its two workspace members, the `exclude` entry and the two `tg*` path deps) is
-the whole separation.
+## Building
+
+Host tests need nothing but the pinned SDK:
+
+```
+cargo test --workspace
+```
+
+The device build needs an epoc **checkout**, because the toolchain, the C++ shim and the
+packaging live there and no crate can carry them:
+
+```
+git clone git@github.com:Lab2021/epoc.git    # once, anywhere
+../epoc/tools/epoc build .                  # → build/tg.sis
+```
+
+Working on both at once? Point cargo at the local SDK instead of the pinned revision, with a
+`[patch]` section in this file — one line per crate, and no manifest edits to revert
+afterwards:
+
+```toml
+[patch."https://github.com/Lab2021/epoc"]
+symbian = { path = "../epoc/crates/symbian" }
+symbian-ui = { path = "../epoc/crates/symbian-ui" }
+# … and the rest as needed
+```
+
+Credentials go in `api.conf`, which is gitignored — copy `api.conf.example` and fill it in.
 
 The reference app, and the reason the SDK exists. The UI is real and runs on the E72; the
 protocol is real and talks to Telegram. They are not joined up yet — `App::mock()` still
