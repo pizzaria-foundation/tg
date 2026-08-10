@@ -1,0 +1,14 @@
+# Fetch git dependencies with the `git` CLI instead of cargo's built-in libgit2 client.
+#
+# The SDK is a private repository reached over SSH, and libgit2's ssh-agent path fails on it
+# with a message that reads like the commit is missing:
+#
+#     revision <sha> not found
+#     attempted ssh-agent authentication, but no usernames succeeded: `git`
+#
+# It is a permission problem wearing a wrong hat. The `git` CLI already authenticates here —
+# it is what pushed this repository — so handing the fetch to it is the fix cargo itself
+# suggests. Committed rather than left to each developer's ~/.cargo/config.toml, because
+# without it a fresh clone cannot resolve its own dependencies.
+[net]
+git-fetch-with-cli = true

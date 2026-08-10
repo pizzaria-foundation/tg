@@ -24,7 +24,7 @@ Working on both at once? Point cargo at the local SDK instead of the pinned revi
 afterwards:
 
 ```toml
-[patch."https://github.com/Lab2021/epoc"]
+[patch."ssh://git@github.com/Lab2021/epoc"]
 symbian = { path = "../epoc/crates/symbian" }
 symbian-ui = { path = "../epoc/crates/symbian-ui" }
 # … and the rest as needed
