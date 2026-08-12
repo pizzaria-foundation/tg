@@ -87,17 +87,23 @@ def main(outdir):
     # separates a paper plane from an arrowhead.
     d.polygon([s(19, 26), s(26, 34), s(19, 31)], fill=(190, 214, 236))
 
+    # The colour is painted one device pixel past the silhouette, and the mask cuts
+    # the shape. Feathering an edge blends whatever the colour bitmap holds there, so
+    # a body that stopped exactly at the outline would blend the black backdrop and
+    # ring the icon in soot. Bleeding outwards blends blue into blue instead.
     icon = Image.new("RGB", (N, N), (0, 0, 0))
-    icon.paste(body, (0, 0), rounded_mask(N, INSET, RADIUS))
+    icon.paste(body, (0, 0), rounded_mask(N, INSET - F, RADIUS + F))
     icon.resize((S, S), Image.LANCZOS).save(f"{outdir}/telegram_icon.bmp")
 
-    # The mask says which pixels are opaque. 1bpp, so threshold — a grey mask pixel
-    # means nothing at this depth, and dithering the corners looks like dirt.
-    rounded_mask(N, INSET, RADIUS).resize((S, S), Image.LANCZOS).point(
-        lambda v: 255 if v >= 128 else 0
-    ).convert("1").save(f"{outdir}/telegram_icon_mask.bmp")
+    # The mask says how opaque each pixel is: 8bpp greyscale, left anti-aliased. The
+    # platform's own app icons are exactly this — a 16bpp bitmap beside an 8bpp grey
+    # mask (\resource\apps\about.mbm on an E72 is the reference) — and the grey ramp
+    # is what keeps the rounded corners from looking sawn off at 44px.
+    rounded_mask(N, INSET, RADIUS).resize((S, S), Image.LANCZOS).convert("L").save(
+        f"{outdir}/telegram_icon_mask.bmp"
+    )
 
-    print(f"{outdir}/telegram_icon.bmp + telegram_icon_mask.bmp ({S}x{S})")
+    print(f"{outdir}/telegram_icon.bmp + telegram_icon_mask.bmp ({S}x{S}, 8bpp mask)")
 
 
 if __name__ == "__main__":

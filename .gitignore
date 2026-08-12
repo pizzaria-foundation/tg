@@ -12,6 +12,12 @@ api.conf
 build/
 **/target/
 
+# The application icon, regenerated from data/mkicon.py on every build. The generator
+# is the source that can be reviewed; these are two binaries that cannot. Committing
+# them would also mean a rebuild dirties the tree on a machine that changed nothing.
+data/*_icon.bmp
+data/*_icon_mask.bmp
+
 # The raw 2x output of `cargo run --example preview`, ~900 KB a sheet because the PNG
 # writer uses stored deflate blocks. The curated set under docs/screenshots/ is the same
 # pixels re-encoded with a palette - 6 screens in 69 KB - and that one is committed.
