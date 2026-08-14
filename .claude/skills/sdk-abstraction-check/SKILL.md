@@ -137,7 +137,7 @@ A deferral with a stated threshold is a good answer. Silence is not.
 The SDK is a separate repository now, so moving code is a two-repository operation and the
 order matters:
 
-1. Open a pull request on [epoc](https://github.com/Lab2021/epoc) with the code in its
+1. Open a pull request on [epoc](https://github.com/pizzaria-foundation/epoc) with the code in its
    crate, its tests moved with it, and its `README.md` updated. Do not leave the app's copy
    in place "for now" - two implementations is the outcome this whole check exists to avoid.
 2. While it is in review, point cargo at your local checkout with a `[patch]` block (see

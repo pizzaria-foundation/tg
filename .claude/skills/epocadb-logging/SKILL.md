@@ -21,7 +21,7 @@ DEBUG=1
 
 Both live in the SDK, which this application depends on by revision: `symbian::log` is the
 call, the switch and the file; `symbian_app::devbridge` is the live stream. Full reference is
-`docs/epocadb.md` in the [epoc](https://github.com/Lab2021/epoc) repository - read it at the
+`docs/epocadb.md` in the [epoc](https://github.com/pizzaria-foundation/epoc) repository - read it at the
 revision `Cargo.toml` pins, since that is the code this app is built against.
 
 ## What that one line does

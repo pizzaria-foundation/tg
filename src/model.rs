@@ -1373,6 +1373,9 @@ mod tests {
             fn rename(&mut self, _: &[u16], _: &[u16]) -> symbian::Result<()> {
                 Err(symbian::Error::NotFound)
             }
+            fn mkdir(&mut self, _: &[u16]) -> symbian::Result<()> {
+                Err(symbian::Error::NotFound)
+            }
             fn private_path(&mut self, _: &mut [u16]) -> symbian::Result<usize> {
                 Err(symbian::Error::NotFound)
             }

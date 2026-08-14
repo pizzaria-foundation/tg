@@ -274,6 +274,12 @@ mod tests {
             Ok(self.files[&key].len() as u64)
         }
 
+        // A flat map has no directories, so making one is nothing to do and never fails —
+        // which matches the device, where the private path already exists.
+        fn mkdir(&mut self, _path: &[u16]) -> symbian::Result<()> {
+            Ok(())
+        }
+
         fn seek(&mut self, handle: i32, pos: u64) -> symbian::Result<()> {
             let (key, _) = self.open[(handle - 1) as usize].clone().unwrap();
             self.open[(handle - 1) as usize] = Some((key, pos as usize));

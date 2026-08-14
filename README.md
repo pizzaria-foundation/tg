@@ -1,7 +1,7 @@
 # tg - a Telegram client for Symbian
 
 Runs on a Nokia E72 from 2009. Written in Rust on the
-[epoc](https://github.com/Lab2021/epoc) SDK, which it depends on by revision.
+[epoc](https://github.com/pizzaria-foundation/epoc) SDK, which it depends on by revision.
 
 MTProto 2.0 is implemented here from the specification - the PQ factorisation, the
 Diffie-Hellman handshake, the encrypted session, TL serialisation, SRP for two-factor -
@@ -25,7 +25,7 @@ conversation.
 
 That is a 320x240 screen with no touch input: every one of those is driven by the D-pad,
 the two softkeys and the QWERTY. The rasterizer, the fonts and the layout are all the
-SDK's - see [symbian-gfx and symbian-ui](https://github.com/Lab2021/epoc) - and none of it
+SDK's - see [symbian-gfx and symbian-ui](https://github.com/pizzaria-foundation/epoc) - and none of it
 uses an Avkon widget, which is why it looks like this rather than like a 2009 Nokia menu.
 
 
@@ -40,14 +40,14 @@ Host tests and the simulator need nothing but the pinned SDK:
 The device build needs an epoc **checkout**, because the toolchain, the C++ shim and the
 packaging live there and no crate can carry them:
 
-    git clone git@github.com:Lab2021/epoc.git     once, anywhere
+    git clone git@github.com:pizzaria-foundation/epoc.git     once, anywhere
     ../epoc/tools/epoc build .                    -> build/telegram.sis
 
 Working on both at once? Point cargo at the local SDK instead of the pinned revision with
 a `[patch]` block in `Cargo.toml` - one line per crate, and no dependency lines to revert
 afterwards:
 
-    [patch."ssh://git@github.com/Lab2021/epoc"]
+    [patch."ssh://git@github.com/pizzaria-foundation/epoc"]
     symbian = { path = "../epoc/crates/symbian" }
     symbian-ui = { path = "../epoc/crates/symbian-ui" }
     # ... and the rest as needed
