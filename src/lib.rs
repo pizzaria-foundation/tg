@@ -219,6 +219,18 @@ impl App {
     }
 
     fn on_key(&mut self, ev: KeyEvent, theme: &Theme<'_>, screen_rect: Rect) -> Handled {
+        // The red End key closes the app, from any screen and with any text half-typed.
+        // Handled here rather than left to Avkon: the toolkit's own path only fires when
+        // every widget below has returned `Ignored`, and the conversation's editor consumes
+        // whatever it is given — which is why red did nothing at all with a chat open.
+        //
+        // Before the screen match for the same reason: nothing gets to swallow it first.
+        if ev.key == symbian_ui::Key::End {
+            symbian::log!("[act] end key: exit");
+            self.should_exit = true;
+            return Handled::Consumed;
+        }
+
         match &mut self.screen {
             Screen::Login => {
                 let login = &mut self.login;
@@ -1545,6 +1557,24 @@ mod tests {
         let mut app = App::mock();
         assert!(!app.should_exit);
         app.handle_key(KeyEvent::new(Key::Softkey(Softkey::Right)), &t, r);
+        assert!(app.should_exit);
+    }
+
+    #[test]
+    fn the_red_key_exits_even_with_a_half_typed_message() {
+        // The conversation's editor consumes every character it is offered, so this is the
+        // screen where leaving red to the toolkit left it doing nothing at all.
+        let data = atlas();
+        let f = BitmapFont::new(&data).unwrap();
+        let t = Theme::dark(Fonts { body: &f, strong: &f, small: &f, title: &f });
+        let r = Rect::from_size(SCREEN);
+        let mut app = App::mock();
+        app.handle_key(KeyEvent::new(Key::Select), &t, r);
+        for ch in "meio escrito".chars() {
+            app.handle_key(KeyEvent::new(Key::Char(ch)), &t, r);
+        }
+        assert!(!app.should_exit);
+        assert_eq!(app.handle_key(KeyEvent::new(Key::End), &t, r), Handled::Consumed);
         assert!(app.should_exit);
     }
 
