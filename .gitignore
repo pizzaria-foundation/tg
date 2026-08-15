@@ -12,6 +12,13 @@ api.conf
 build/
 **/target/
 
+# Any E32 image, wherever it lands. `build/` above covers the ones symbuild writes, and this
+# covers the ones that get copied out of it: a `telegram-0-e1234569.exe` sat in this root for
+# 25 commits and had to be removed from the history, because api_id and api_hash arrive
+# through `option_env!("TG_API_ID")` and are compiled into the image as plain literals.
+# An .exe here is a credential file that does not look like one.
+*.exe
+
 # The application icon, regenerated from data/mkicon.py on every build. The generator
 # is the source that can be reviewed; these are two binaries that cannot. Committing
 # them would also mean a rebuild dirties the tree on a machine that changed nothing.
