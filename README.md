@@ -52,6 +52,18 @@ afterwards:
     symbian-ui = { path = "../epoc/crates/symbian-ui" }
     # ... and the rest as needed
 
+`dist/telegram.sis` is the built package, committed so that installing needs no toolchain and
+no build: download it, copy it to the phone, open it (App. mgr.). It is unsigned — `SIGN=0` in
+`app.conf` — so it needs a patched installserver (Open4All / RomPatcher+), which is what the
+dev handset has. One executable, no daemons; the app is the whole package.
+
+That committed package carries **no credentials**, and refreshing it must keep it that way.
+`link::api_id()` reads `option_env!("TG_API_ID")`, which `tools/symbuild` exports from
+`api.conf` — so a rebuild on a machine that has credentials bakes them into the `.exe` as
+string literals, and copying that `.sis` into `dist/` publishes them. Build with `api.conf`
+moved aside before updating `dist/`; the result is an app that reaches Telegram and is
+answered `API_ID_INVALID`, which is the correct behaviour for a package anyone can download.
+
 Credentials go in `api.conf`, which is gitignored. Copy `api.conf.example` and fill it in:
 `api_id` and `api_hash` from my.telegram.org, and optionally `EPOCADB_HOST` for the dev
 bridge. Without them the build still works and `auth.sendCode` answers `API_ID_INVALID`,
