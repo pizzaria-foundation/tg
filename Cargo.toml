@@ -25,14 +25,14 @@ tg-proto = { path = "proto" }
 # permission problem as a missing commit. Pinned by revision rather than by branch so a build
 # is reproducible: bump these deliberately, together, and run the device build before
 # trusting the result.
-symbian = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "2ae7b657925d5e3a973366e7af86ee9285a32401" }
-symbian-ui = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "2ae7b657925d5e3a973366e7af86ee9285a32401" }
-symbian-gfx = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "2ae7b657925d5e3a973366e7af86ee9285a32401" }
-symbian-sys = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "2ae7b657925d5e3a973366e7af86ee9285a32401" }
-symbian-app = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "2ae7b657925d5e3a973366e7af86ee9285a32401" }
-symbian-crypto = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "2ae7b657925d5e3a973366e7af86ee9285a32401" }
-symbian-sim = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "2ae7b657925d5e3a973366e7af86ee9285a32401" }
-symbian-preview = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "2ae7b657925d5e3a973366e7af86ee9285a32401" }
+symbian = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
+symbian-ui = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
+symbian-gfx = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
+symbian-sys = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
+symbian-app = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
+symbian-crypto = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
+symbian-sim = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
+symbian-preview = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
 
 # Mirrors the SDK's device profile: small binaries matter on a phone with ~30 MB of usable
 # RAM and a ~100 KB-per-page demand loader.
