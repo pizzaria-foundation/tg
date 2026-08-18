@@ -277,7 +277,9 @@ impl Login {
     /// Whether this login is parked on its waiting screen.
     ///
     /// The one thing a caller outside can ask that says "the request went out": every submit moves
-    /// the machine here while it waits for the server.
+    /// the machine here while it waits for the server. Only a test asks so far, which is why it is
+    /// behind `cfg(test)` — the screens themselves match on `self.screen` directly.
+    #[cfg(test)]
     pub(crate) fn is_waiting(&self) -> bool {
         matches!(self.screen, Screen::Waiting(_))
     }

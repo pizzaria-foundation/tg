@@ -230,11 +230,34 @@ impl Conversation {
         theme.fonts.body.line_height() + 8
     }
 
+    /// The two bands of this screen, from the whole screen rect.
+    ///
+    /// The declarative version does not call this: `Screen` carves the same two bands — the content
+    /// band, minus the footer's measured height off the bottom — and hands each one to the widget
+    /// that draws it. Which is why every function below takes the *transcript band* rather than the
+    /// screen: two answers to "where does the transcript go" is how a caret ends up in a different
+    /// place than the text it belongs to.
+    pub(crate) fn bands(&self, theme: &Theme<'_>, screen: Rect) -> (Rect, Rect) {
+        let frame = Frame::split(screen, theme, true, true);
+        let (composer, transcript) = frame.content.split_bottom(self.composer_h(theme));
+        (transcript, composer)
+    }
+
     /// Re-wrap if the width or the message count changed, then hand back the
     /// layout along with the transcript viewport height.
+    ///
+    /// Only the tests reach for this now: everything that draws or routes a key has the band already,
+    /// either because it computed it ([`Self::draw`]) or because the layout pass gave it one.
+    #[cfg(test)]
     fn ensure_layout(&mut self, chat: &Chat, theme: &Theme<'_>, screen: Rect) -> (Rect, Rect) {
-        let frame = Frame::split(screen, theme, true, true);
-        let (composer, transcript_area) = frame.content.split_bottom(self.composer_h(theme));
+        let (transcript_area, composer) = self.bands(theme, screen);
+        self.ensure_layout_in(chat, theme, transcript_area);
+        (transcript_area, composer)
+    }
+
+    /// [`Self::ensure_layout`] for a caller that already knows the band — which is every caller in
+    /// the declarative screen, since the layout pass is what decided it.
+    pub(crate) fn ensure_layout_in(&mut self, chat: &Chat, theme: &Theme<'_>, transcript_area: Rect) {
         let avail = transcript_area.width() - theme.metrics.pad * 2;
 
         let stale = self.transcript.as_ref().is_none_or(|t| t.is_stale(chat, avail));
@@ -270,7 +293,45 @@ impl Conversation {
                 }
             }
         }
-        (transcript_area, composer)
+    }
+
+    /// What the action key means where the cursor is: open the link, or open the message's media.
+    ///
+    /// Takes no theme, and that is deliberate. The declarative screen routes the action key at the
+    /// *application* level — the bar owns it when the composer has focus, so it cannot be left to a
+    /// widget — and `update` has no theme by design. What needed one was the note this used to set:
+    /// `abrindo [🖼 47 KB]…`, built by `media_label`, which asks the font which glyphs it has.
+    ///
+    /// That note was never seen. Every path that follows it reports again within the same keypress —
+    /// `download_media` and `start_photo_decode` each `say` something on every branch — so it was
+    /// overwritten before any frame drew it. The note here is font-free and says the same thing.
+    ///
+    /// A focused link wins over the message's media. It has to: the cursor is visibly on the link, and
+    /// opening something else would be the screen doing one thing while showing another.
+    pub(crate) fn activate(&mut self, chat: &Chat) -> ConvAction {
+        if let Some(url) = self.focused_link(chat) {
+            let url = alloc::string::String::from(url);
+            self.note = Some(alloc::format!("abrindo {url}"));
+            return ConvAction::OpenLink(url);
+        }
+        if let Some(msg) = chat.messages.get(self.state.selected) {
+            if msg.media.is_some() {
+                self.note = Some(alloc::string::String::from("abrindo…"));
+                return ConvAction::OpenMedia(self.state.selected);
+            }
+        }
+        ConvAction::None
+    }
+
+    /// Take the composer's text to send, if there is any.
+    ///
+    /// The composer is emptied by the *taking*, which is why this is one call and not a read followed
+    /// by a clear: two callers doing it in two steps is how a message gets sent twice or lost.
+    pub(crate) fn take_to_send(&mut self) -> Option<alloc::string::String> {
+        if self.composer.is_empty() {
+            return None;
+        }
+        Some(self.composer.take())
     }
 
     /// The links in the selected message, if the layout has been built.
@@ -358,6 +419,10 @@ impl Conversation {
     /// focus to the composer at the bottom — and re-implementing any of it here to make room for a
     /// link cursor would be a second copy that drifts. So the cursor walks first, and if it has run
     /// out of links the untouched routing runs exactly as before.
+    /// A key, with the whole screen to work the bands out from.
+    ///
+    /// The hand-written path, kept because it is the reference the comparison measures against. The
+    /// declarative screen calls [`Self::handle_key_in`] with the band the layout gave it.
     pub fn handle_key(
         &mut self,
         ev: KeyEvent,
@@ -365,22 +430,34 @@ impl Conversation {
         theme: &Theme<'_>,
         screen: Rect,
     ) -> (Handled, ConvAction) {
+        let (area, _) = self.bands(theme, screen);
+        self.handle_key_in(ev, chat, theme, area)
+    }
+
+    /// A key, at a transcript band somebody else decided.
+    pub fn handle_key_in(
+        &mut self,
+        ev: KeyEvent,
+        chat: &Chat,
+        theme: &Theme<'_>,
+        area: Rect,
+    ) -> (Handled, ConvAction) {
         let delta = match ev.key {
             Key::Up if self.focus == Focus::Transcript => Some(-1isize),
             Key::Down if self.focus == Focus::Transcript => Some(1isize),
             _ => None,
         };
         let Some(d) = delta else {
-            return self.route_key(ev, chat, theme, screen);
+            return self.route_key(ev, chat, theme, area);
         };
         // The layout has to exist before `links_here` can answer, and it is what the routing builds
         // first anyway.
-        self.ensure_layout(chat, theme, screen);
+        self.ensure_layout_in(chat, theme, area);
         if self.step_link(d) {
             return (Handled::Consumed, ConvAction::None);
         }
         let before = self.state.selected;
-        let out = self.route_key(ev, chat, theme, screen);
+        let out = self.route_key(ev, chat, theme, area);
         if self.state.selected != before {
             self.enter_from(d);
         }
@@ -392,9 +469,9 @@ impl Conversation {
         ev: KeyEvent,
         chat: &Chat,
         theme: &Theme<'_>,
-        screen: Rect,
+        area: Rect,
     ) -> (Handled, ConvAction) {
-        let (area, _) = self.ensure_layout(chat, theme, screen);
+        self.ensure_layout_in(chat, theme, area);
         let vp = area.height();
 
         match ev.key {
@@ -408,22 +485,7 @@ impl Conversation {
             Key::Softkey(Softkey::Middle) | Key::Enter | Key::Call | Key::Select => {
                 // In Transcript focus, open media or ignore — never send text.
                 if self.focus == Focus::Transcript {
-                    // A focused link wins over the message's media. It has to: the cursor is
-                    // visibly on the link, and opening something else would be the screen doing one
-                    // thing while showing another.
-                    if let Some(url) = self.focused_link(chat) {
-                        let url = alloc::string::String::from(url);
-                        self.note = Some(alloc::format!("abrindo {url}"));
-                        return (Handled::Consumed, ConvAction::OpenLink(url));
-                    }
-                    if let Some(msg) = chat.messages.get(self.state.selected) {
-                        if let Some(media) = &msg.media {
-                            let label = media_label(media, theme.fonts.body);
-                            self.note = Some(alloc::format!("abrindo {label}…"));
-                            return (Handled::Consumed, ConvAction::OpenMedia(self.state.selected));
-                        }
-                    }
-                    return (Handled::Consumed, ConvAction::None);
+                    return (Handled::Consumed, self.activate(chat));
                 }
                 // Composer focus: send if not empty.
                 if !self.composer.is_empty() {
@@ -513,16 +575,53 @@ impl Conversation {
         (handled, ConvAction::None)
     }
 
+    /// The whole screen, chrome and all.
+    ///
+    /// The hand-written path, and the reference the comparison measures against. It is now three
+    /// calls: the chrome, then the two bands, each of which the declarative screen draws through the
+    /// same function this does — [`Self::draw_transcript`] and [`Self::draw_composer`]. One drawing
+    /// per band, two placements.
     pub fn draw(&mut self, c: &mut Canvas<'_>, chat: &Chat, theme: &Theme<'_>) {
         let screen = Rect::from_size(c.size());
-        let (area, composer_r) = self.ensure_layout(chat, theme, screen);
+        let (area, composer_r) = self.bands(theme, screen);
         let frame = Frame::split(screen, theme, true, true);
-        let t = self.transcript.as_ref().unwrap();
-        let p = &theme.palette;
 
         chrome::clear(c, theme);
-        let sub = if chat.loading { Some("carregando…") } else { self.note.as_deref() };
+        let sub = self.subtitle(chat);
         chrome::title_bar(c, frame.title, theme, &chat.name, sub);
+
+        self.draw_transcript(c, area, chat, theme);
+        self.draw_composer(c, composer_r, theme);
+
+        chrome::softkey_bar(c, frame.softkeys, theme, self.labels());
+    }
+
+    /// What the title bar says under the chat's name: a page arriving, or whatever the screen last
+    /// had to report.
+    pub(crate) fn subtitle(&self, chat: &Chat) -> Option<&str> {
+        if chat.loading {
+            Some("carregando…")
+        } else {
+            self.note.as_deref()
+        }
+    }
+
+    /// The softkey labels: refresh, send when there is something to send, back.
+    pub(crate) fn labels(&self) -> [Option<&'static str>; 3] {
+        let send = if self.composer.is_empty() { None } else { Some("Enviar") };
+        [Some("Atualizar"), send, Some("Voltar")]
+    }
+
+    /// The transcript, in the band it was given.
+    pub(crate) fn draw_transcript(
+        &mut self,
+        c: &mut Canvas<'_>,
+        area: Rect,
+        chat: &Chat,
+        theme: &Theme<'_>,
+    ) {
+        self.ensure_layout_in(chat, theme, area);
+        let t = self.transcript.as_ref().unwrap();
 
         let bar = self.state.scrollbar(t, area.height());
         let gutter = chrome::scrollbar_gutter(theme, bar.is_some());
@@ -546,8 +645,17 @@ impl Conversation {
             draw_bubble(c, r, theme, &chat.messages[i], &t.laid[i], focused, link_focus);
         });
         chrome::scrollbar(c, area, theme, bar);
+    }
 
-        // Composer
+    /// The composer, in the band it was given: a rule, a band, the text or its placeholder, and the
+    /// caret when it has the keyboard.
+    ///
+    /// Not `chrome::text_field`, and the difference is the point: that one is a *boxed* field centred
+    /// in a form, and this is a strip across the bottom of a screen with a rule above it. Sharing
+    /// them would mean a style flag per pixel of difference; leaving them apart means this screen's
+    /// composer keeps looking like itself.
+    pub(crate) fn draw_composer(&self, c: &mut Canvas<'_>, composer_r: Rect, theme: &Theme<'_>) {
+        let p = &theme.palette;
         c.hline(composer_r.y0, composer_r.x0, composer_r.x1, p.divider);
         symbian_ui::paint::band(c, Rect { y0: composer_r.y0 + 1, ..composer_r }, &p.chrome);
         let field = composer_r.inset_xy(theme.metrics.pad, 3);
@@ -580,8 +688,6 @@ impl Conversation {
             c.fill_rect(Rect::new(cx, field.y0, cx + 1, field.y1), p.accent);
         }
 
-        let send = if self.composer.is_empty() { None } else { Some("Enviar") };
-        chrome::softkey_bar(c, frame.softkeys, theme, [Some("Atualizar"), send, Some("Voltar")]);
     }
 }
 

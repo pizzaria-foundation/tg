@@ -21,6 +21,8 @@ pub mod chats;
 /// The dialog list built declaratively, beside the hand-written one. See the module header.
 pub mod chats_decl;
 pub mod conv;
+/// The conversation described around a transcript that is still drawn by hand. See the module header.
+pub mod conv_decl;
 /// The application as model-update-view, with the screens that are still hand-written behind an
 /// adapter. See the module header for the shape of the migration.
 pub mod mvu;
@@ -30,8 +32,8 @@ pub mod model;
 use alloc::string::String;
 use symbian_ui::{Canvas, Handled, KeyEvent, Rect, Theme};
 
-use conv::{ConvAction, Conversation};
-use login::{Login, LoginAction};
+use conv::Conversation;
+use login::Login;
 use model::{Delivery, Message, Store};
 
 /// Which screen is in front. A two-level stack is all this app needs, so it is an
@@ -316,79 +318,14 @@ impl App {
             // this arm; `Ignored` rather than `unreachable!()`, because a panic on a phone whose
             // whole failure report is a dialog with a number in it is not worth being right about.
             Screen::Chats => Handled::Ignored,
-            Screen::Conversation(conv) => {
-                let idx = conv.chat;
-                let (handled, action) =
-                    conv.handle_key(ev, &self.store.chats[idx], theme, screen_rect);
-                // The selection may have moved; a photo far from it does not need its
-                // inline JPEG on a 4 MB heap. Once per keypress, not once per frame.
-                self.window_previews(idx);
-                match action {
-                    ConvAction::Back => {
-                        // One write per closing, which also catches the messages sent while
-                        // it was open — those never pass through a history reply.
-                        if let Some(c) = self.store.chats.get(idx) {
-                            store_cache::save_tail(&mut symbian::ShimFs, c);
-                        }
-                        // Coming back lands on the chat just left, not at the top of the list.
-                        // The cursor is the application's now, so this is a field rather than a
-                        // screen object built with its state pre-set.
-                        self.chats_selected = idx;
-                        self.screen = Screen::Chats;
-                        Handled::Consumed
-                    }
-                    ConvAction::Send(text) => {
-                        self.send(idx, text);
-                        Handled::Consumed
-                    }
-                    ConvAction::LoadMore => {
-                        self.load_older(idx);
-                        Handled::Consumed
-                    }
-                    ConvAction::Refresh => {
-                        self.refresh_conversation(idx);
-                        if let Screen::Conversation(conv) = &mut self.screen {
-                            conv.note = Some(self.store.status.clone());
-                        }
-                        Handled::Consumed
-                    }
-                    ConvAction::OpenLink(url) => {
-                        // Handed to the launcher, and that is the whole of this client's part in it.
-                        //
-                        // Which application opens a link, whether to copy it first, how to hand a
-                        // URL to a browser that ignores command lines — none of that is a chat
-                        // client's business. It is one decision, made in one place, for every
-                        // application on the phone; a copy of it here would be a second place for
-                        // the answer to differ. This knows there is a launcher and nothing else.
-                        let note = self.post_link(&url);
-                        if let Screen::Conversation(conv) = &mut self.screen {
-                            conv.note = Some(note);
-                        }
-                        Handled::Consumed
-                    }
-                    ConvAction::Copy(text) => {
-                        // The screen already said "copiado" when it decided what was meant. If the
-                        // clipboard refuses — a build without USE_CLIPBOARD, a platform that says
-                        // no — that promise has to be taken back, or the user pastes into Notes and
-                        // finds whatever they copied an hour ago.
-                        if symbian::clipboard::set_text(&text).is_err() {
-                            symbian::log!("[tg] clipboard refused {} chars", text.len());
-                            if let Screen::Conversation(conv) = &mut self.screen {
-                                conv.note = Some(String::from("nao foi possivel copiar"));
-                            }
-                        }
-                        Handled::Consumed
-                    }
-                    ConvAction::OpenMedia(msg_idx) => {
-                        // No note copying here: `download_media` reports through `say`, which
-                        // reaches this screen on its own — and, unlike this, keeps reaching it
-                        // for every chunk that arrives afterwards.
-                        self.download_media(idx, msg_idx);
-                        Handled::Consumed
-                    }
-                    ConvAction::None => handled,
-                }
-            }
+            // The conversation does not arrive here any more.
+            //
+            // Its chrome is `conv_decl` and its transcript is a leaf inside that tree; the keys the
+            // screen does not claim reach `Conversation::handle_key_in` through the widget, and the
+            // actions it returns come back as messages. What was in this arm — a `ConvAction` turned
+            // into a call on the store, the cache or the launcher — is `App::conversation_action`
+            // below, called from `update`, which is where the driver and the filesystem already are.
+            Screen::Conversation(_) => Handled::Ignored,
             Screen::Viewer(v, from_chat) => {
                 let area = symbian_ui::Viewer::content(screen_rect, theme);
                 let (handled, action) = v.handle_key(ev, area);
@@ -603,6 +540,137 @@ impl App {
     #[cfg(test)]
     pub(crate) fn show_password_for_test(&mut self, hint: &str) {
         self.login.show_password_for_test(hint);
+    }
+
+    /// Carry out what a conversation asked for.
+    ///
+    /// One method holding the arms that used to be in `on_key`, unchanged: the same writes to the tail
+    /// cache, the same note taken back when the clipboard refuses, the same single decision about who
+    /// opens a link. It is called from `update`, which is where a message arrives.
+    pub(crate) fn conversation_action(&mut self, action: conv::ConvAction) {
+        use conv::ConvAction as A;
+        let Some(idx) = self.conversation().map(|c| c.chat) else { return };
+        // The selection may have moved; a photo far from it does not need its inline JPEG on a 4 MB
+        // heap. Once per keypress, not once per frame.
+        self.window_previews(idx);
+        match action {
+            A::Back => {
+                // One write per closing, which also catches the messages sent while it was open —
+                // those never pass through a history reply.
+                if let Some(c) = self.store.chats.get(idx) {
+                    store_cache::save_tail(&mut symbian::ShimFs, c);
+                }
+                // Coming back lands on the chat just left, not at the top of the list.
+                self.chats_selected = idx;
+                self.screen = Screen::Chats;
+            }
+            A::Send(text) => self.send(idx, text),
+            A::LoadMore => self.load_older(idx),
+            A::Refresh => {
+                self.refresh_conversation(idx);
+                let status = self.store.status.clone();
+                if let Screen::Conversation(conv) = &mut self.screen {
+                    conv.note = Some(status);
+                }
+            }
+            A::OpenLink(url) => {
+                // Handed to the launcher, and that is the whole of this client's part in it.
+                //
+                // Which application opens a link, whether to copy it first, how to hand a URL to a
+                // browser that ignores command lines — none of that is a chat client's business. It is
+                // one decision, made in one place, for every application on the phone; a copy of it
+                // here would be a second place for the answer to differ.
+                let note = self.post_link(&url);
+                if let Screen::Conversation(conv) = &mut self.screen {
+                    conv.note = Some(note);
+                }
+            }
+            A::Copy(text) => {
+                // The screen already said "copiado" when it decided what was meant. If the clipboard
+                // refuses — a build without USE_CLIPBOARD, a platform that says no — that promise has
+                // to be taken back, or the user pastes into Notes and finds whatever they copied an
+                // hour ago.
+                if symbian::clipboard::set_text(&text).is_err() {
+                    symbian::log!("[tg] clipboard refused {} chars", text.len());
+                    if let Screen::Conversation(conv) = &mut self.screen {
+                        conv.note = Some(String::from("nao foi possivel copiar"));
+                    }
+                }
+            }
+            A::OpenMedia(msg_idx) => {
+                // No note copying here: `download_media` reports through `say`, which reaches this
+                // screen on its own — and, unlike a note set once, keeps reaching it for every chunk
+                // that arrives afterwards.
+                self.download_media(idx, msg_idx);
+            }
+            A::None => {}
+        }
+    }
+
+    /// The action key with the transcript focused: whatever the cursor is on.
+    ///
+    /// Resolved here rather than in the widget because `Screen` gives its softkey bar the action key
+    /// before its content, so the *application* is the only place that can route it by focus. What it
+    /// means is still the conversation's answer — `Conversation::activate`.
+    pub(crate) fn conversation_activate(&mut self) {
+        let action = match self.conversation_and_chat() {
+            Some((conv, chat)) => conv.activate(chat),
+            None => return,
+        };
+        self.conversation_action(action);
+    }
+
+    /// The middle key with the composer focused: send what was typed, if anything.
+    pub(crate) fn conversation_send(&mut self) {
+        let Some(text) = self.conversation_mut().and_then(|c| c.take_to_send()) else { return };
+        self.conversation_action(conv::ConvAction::Send(text));
+    }
+
+    /// An application parked in a conversation, for the comparison harness.
+    ///
+    /// The screen enum is this module's, so a scene cannot be assembled from outside it — and the
+    /// alternative to this one constructor was a public setter per field, which is a test deciding
+    /// what the type looks like. `#[cfg(test)]` because the comparison lives in a test module; the
+    /// day a preview wants the same door, it becomes an ordinary constructor beside `mock_login`.
+    #[cfg(test)]
+    pub(crate) fn in_conversation_for_test(store: Store, conv: conv::Conversation) -> Self {
+        let mut me = Self::new(store);
+        me.screen = Screen::Conversation(conv);
+        me
+    }
+
+    /// The conversation in front, to change.
+    pub(crate) fn conversation_mut(&mut self) -> Option<&mut conv::Conversation> {
+        match &mut self.screen {
+            Screen::Conversation(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// The conversation in front, and the chat it is of, for a caller that needs both at once.
+    ///
+    /// A method rather than two accessors because of the borrow: the screen wants `&mut` and the chat
+    /// wants `&`, and they are two *fields* of this struct — which the borrow checker allows only when
+    /// they are reached in one place. `paint` used to work around it by cloning the whole chat on
+    /// every frame, messages and inline JPEGs and all, which is the same defect the dialog list had
+    /// and rather more expensive.
+    pub(crate) fn conversation_and_chat(&mut self) -> Option<(&mut conv::Conversation, &model::Chat)> {
+        let Screen::Conversation(conv) = &mut self.screen else { return None };
+        let chat = self.store.chats.get(conv.chat)?;
+        Some((conv, chat))
+    }
+
+    /// The conversation in front, to read.
+    pub(crate) fn conversation(&self) -> Option<&conv::Conversation> {
+        match &self.screen {
+            Screen::Conversation(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// Whether a conversation is what is in front.
+    pub(crate) fn on_conversation(&self) -> bool {
+        matches!(self.screen, Screen::Conversation(_))
     }
 
     /// Whether a login screen is what is in front.
@@ -1243,12 +1311,10 @@ impl App {
             // this function is only called through the adapter around the hand-written screens. See
             // the `Screen::Chats` variant.
             Screen::Chats => {}
-            Screen::Conversation(conv) => {
-                let idx = conv.chat;
-                // Split the borrow: the screen needs &mut, the chat needs &.
-                let chat = self.store.chats[idx].clone();
-                conv.draw(c, &chat, theme);
-            }
+            // Nothing: the conversation is a declarative tree the bridge draws — `conv_decl` — and
+            // this function is only reached through the adapter around the screens still written by
+            // hand. `Conversation::draw` is still the reference the comparison measures against.
+            Screen::Conversation(_) => {}
             // The strings are the app's: the SDK's viewer ships no text.
             Screen::Viewer(v, _) => v.draw(c, theme, "Foto", "Voltar"),
         }

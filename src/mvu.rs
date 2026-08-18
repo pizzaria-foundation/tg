@@ -62,7 +62,7 @@ use symbian_decl_ui::widgets::{Imperative, Node};
 
 use symbian_ui::{App as _, Canvas, Handled, KeyEvent, Rect, Theme};
 
-use crate::{chats_decl, login_decl};
+use crate::{chats_decl, conv_decl, login_decl};
 use crate::App;
 
 /// Everything the application knows, which for now is the application.
@@ -88,6 +88,10 @@ pub enum Msg {
     Chats(chats_decl::Msg),
     /// A login screen said something.
     Login(login_decl::Msg),
+    /// The conversation said something.
+    Conv(conv_decl::Msg),
+    /// Leave the application. The red key, from any screen.
+    Exit,
     /// The imperative side ran; whatever it changed, the screen no longer describes the model.
     ///
     /// Deliberately carries nothing. It is not an event, it is an admission — the old code changed
@@ -127,12 +131,25 @@ impl DeclarativeApp for Tg {
             chats_decl::softkeys(app.store.dialogs_loading).map(Msg::Chats)
         } else if app.on_login() {
             login_decl::softkeys(&login_decl::State::of(app.login_state())).map(Msg::Login)
+        } else if let Some(conv) = app.conversation() {
+            conv_decl::softkeys(conv.composer.is_empty()).map(Msg::Conv)
         } else {
             Softkeys::new()
         }
     }
 
     fn on_key(m: &Model, ev: KeyEvent) -> Option<Msg> {
+        // The red End key closes the application, from any screen and with any text half-typed.
+        //
+        // First, before anything else can want it — which is exactly where the hand-written app put
+        // it, and for the reason its comment gives: the toolkit's own path only fires when every
+        // widget below has returned `Ignored`, and a composer consumes whatever it is given. It has
+        // to be here rather than on a bar because it is not a softkey, and because a screen whose
+        // back slot means something else — the login code screen's "Voltar" — would otherwise answer
+        // it and the phone would feel stuck.
+        if ev.key == symbian_ui::Key::End {
+            return Some(Msg::Exit);
+        }
         // Only the dialog list is claimed at this level. `None` for everything else is what lets the
         // key reach the adapter — the bridge asks the app first, so an arm here would win.
         let app = m.app.borrow();
@@ -141,6 +158,9 @@ impl DeclarativeApp for Tg {
         }
         if app.on_login() {
             return login_decl::on_key(&login_decl::State::of(app.login_state()), ev).map(Msg::Login);
+        }
+        if let Some(conv) = app.conversation() {
+            return conv_decl::on_key(conv.focus, conv.composer.is_empty(), ev).map(Msg::Conv);
         }
         None
     }
@@ -154,6 +174,10 @@ impl DeclarativeApp for Tg {
         match msg {
             // Nothing to do: `send` has already dropped the tree, which is the whole request.
             Msg::Touched => Cmd::None,
+            Msg::Exit => {
+                symbian::log!("[act] end key: exit");
+                Cmd::Exit
+            }
             Msg::Chats(c) => match c {
                 chats_decl::Msg::Select(i) => {
                     // Clamped against the list as it stands. The widget clamps too, and the two
@@ -203,6 +227,31 @@ impl DeclarativeApp for Tg {
                 // hand-written screen did with an unlabelled key. See `login_decl::on_key`.
                 login_decl::Msg::Quit => Cmd::Exit,
             },
+            Msg::Conv(c) => {
+                use conv_decl::Msg as C;
+                match c {
+                    // Whatever the cursor is on: the conversation decides, the application acts.
+                    C::Activate => app.conversation_activate(),
+                    C::Send => app.conversation_send(),
+                    C::SendTaken(text) => {
+                        app.conversation_action(crate::conv::ConvAction::Send(text))
+                    }
+                    C::Back => app.conversation_action(crate::conv::ConvAction::Back),
+                    C::Refresh => app.conversation_action(crate::conv::ConvAction::Refresh),
+                    C::LoadMore => app.conversation_action(crate::conv::ConvAction::LoadMore),
+                    C::OpenMedia(i) => {
+                        app.conversation_action(crate::conv::ConvAction::OpenMedia(i))
+                    }
+                    C::OpenLink(url) => {
+                        app.conversation_action(crate::conv::ConvAction::OpenLink(url))
+                    }
+                    C::Copy(text) => app.conversation_action(crate::conv::ConvAction::Copy(text)),
+                    // Nothing to do but exist: `send` has already dropped the tree, which is the
+                    // whole of what this message asks for. See `conv_decl::ViewState`.
+                    C::ViewStale => {}
+                }
+                Cmd::None
+            }
         }
     }
 
@@ -239,6 +288,13 @@ impl DeclarativeApp for Tg {
                 .field()
                 .unwrap_or_else(|| crate::login::shared(symbian_ui::TextField::new()));
             return login_decl::view(&state, &field, slots);
+        }
+
+        if app.on_conversation() {
+            // The transcript and the composer are leaves over this same `Rc` — a transcript cannot be
+            // drawn from a copy of a chat, and a chat carries its whole message window.
+            drop(app);
+            return conv_decl::view(&m.app, &m.out.wrapped(Msg::Conv));
         }
 
         // Everything else, still hand-written, still what ships.
@@ -388,6 +444,7 @@ impl symbian_ui::App for Shell {
 mod tests {
     use super::*;
     use symbian_gfx::Size;
+    use alloc::string::ToString;
     use symbian_ui::{Key, Softkey};
 
     const SCREEN: Size = Size::new(320, 240);
@@ -580,6 +637,134 @@ mod tests {
             // The digits filter is inside the buffer, so the punctuation and the leading `+` — which
             // the screen draws rather than stores — are dropped on the way in.
             assert_eq!(field.borrow().text(), "5521999990000");
+        });
+    }
+
+    #[test]
+    fn the_red_key_leaves_from_every_screen() {
+        // It used to be the first thing `App::on_key` did, and the screens that have left the
+        // adapter no longer go through that function — so it moved here, and this is what says it
+        // arrived. The login code screen is the case that made it urgent: its left softkey is
+        // "Voltar", so the *back* slot is empty and `End` would have fallen through to a field that
+        // ignores it. A phone that will not close is not a small bug.
+        let atlases = symbian_preview::Atlases::load();
+        atlases.with_themes(|dark, _light| {
+            for (what, mut shell) in [
+                ("the dialog list", mock()),
+                ("a login screen", mock_login()),
+            ] {
+                frame(&mut shell, dark);
+                assert!(!shell.should_exit(), "{what} wanted to exit before being asked");
+                assert_eq!(press(&mut shell, dark, Key::End), Handled::Consumed, "{what}");
+                assert!(shell.should_exit(), "{what} did not close on the red key");
+            }
+        });
+    }
+
+    // ---- the conversation -------------------------------------------------------------------------
+
+    /// A shell in the newest chat's conversation, with a frame drawn.
+    fn with_conversation(f: impl FnOnce(&mut Shell, &Theme<'_>)) {
+        let atlases = symbian_preview::Atlases::load();
+        let mut ran = false;
+        atlases.with_themes(|dark, _light| {
+            let mut shell = mock();
+            frame(&mut shell, dark);
+            press(&mut shell, dark, Key::Select);
+            assert_eq!(shell.app().in_conversation(), Some(0), "the chat did not open");
+            frame(&mut shell, dark);
+            f(&mut shell, dark);
+            ran = true;
+        });
+        assert!(ran, "the atlases did not yield a theme");
+    }
+
+    /// The rows of the softkey bar, which is the part of the screen a stale tree gets wrong.
+    fn softkey_rows(shell: &mut Shell, theme: &Theme<'_>) -> alloc::vec::Vec<u16> {
+        let mut buf = alloc::vec![0u16; (SCREEN.w * SCREEN.h) as usize];
+        let mut c = Canvas::from_slice(&mut buf, SCREEN);
+        shell.draw(&mut c, theme);
+        let from = ((SCREEN.h - theme.metrics.softkey_h) * SCREEN.w) as usize;
+        buf[from..].to_vec()
+    }
+
+    #[test]
+    fn the_first_character_typed_makes_the_bar_offer_to_send_it() {
+        // The bug this test exists for is not in the drawing, it is in *when* the description is
+        // rebuilt. Typing is answered by a widget, and the bridge deliberately does not rebuild the
+        // view for that — so the "Enviar" label, which lives in the tree, arrived one keypress late
+        // or not at all. A pixel comparison of one state cannot see it; the preview, which presses
+        // keys and then draws, can. See `conv_decl::ViewState`.
+        with_conversation(|shell, t| {
+            let empty_bar = softkey_rows(shell, t);
+            press(shell, t, Key::Char('o'));
+            let typed_bar = softkey_rows(shell, t);
+            assert_ne!(empty_bar, typed_bar, "the bar did not gain a label for the text just typed");
+
+            // And it goes away again with the last character.
+            press(shell, t, Key::Backspace);
+            assert_eq!(softkey_rows(shell, t), empty_bar, "the label outstayed the text");
+        });
+    }
+
+    #[test]
+    fn a_note_the_transcript_wrote_reaches_the_title_bar() {
+        // The same staleness, on the other thing `view` reads. Up at the very top of a windowed chat
+        // writes "inicio do que esta guardado" and asks for nothing, so there is no action to
+        // invalidate the tree — the note has to say so itself.
+        with_conversation(|shell, t| {
+            shell.with_app(|a| {
+                if let Some(c) = a.store.chats.get_mut(0) {
+                    c.windowed = true;
+                    c.complete = false;
+                }
+            });
+            frame(shell, t);
+            // Into the transcript, then to its top.
+            press(shell, t, Key::Up);
+            for _ in 0..40 {
+                press(shell, t, Key::Up);
+            }
+            let note = shell.app().conversation().and_then(|c| c.note.clone());
+            assert_eq!(note.as_deref(), Some("inicio do que esta guardado"));
+        });
+    }
+
+    #[test]
+    fn the_action_key_follows_the_focus() {
+        // With the composer focused it sends; with the transcript focused it opens what the cursor is
+        // on. The bar has one middle slot and cannot say that, so the application routes it — and
+        // this is what says the routing is by focus and not by label.
+        with_conversation(|shell, t| {
+            for ch in "oi".chars() {
+                press(shell, t, Key::Char(ch));
+            }
+            // Focus into the transcript: the action must *not* send now, even though the bar says
+            // "Enviar", because that is what the hand-written screen does.
+            press(shell, t, Key::Up);
+            press(shell, t, Key::Select);
+            let text = shell
+                .app()
+                .conversation()
+                .map(|c| c.composer.text().to_string())
+                .unwrap_or_default();
+            assert_eq!(text, "oi", "the transcript's action key sent the composer's text");
+
+            // Back to the composer, and now it sends.
+            let before = shell.app().store.chats[0].messages.len();
+            press(shell, t, Key::Down);
+            press(shell, t, Key::Select);
+            assert_eq!(shell.app().store.chats[0].messages.len(), before + 1);
+            assert!(shell.app().conversation().is_some_and(|c| c.composer.is_empty()));
+        });
+    }
+
+    #[test]
+    fn leaving_the_conversation_returns_to_the_chat_it_was_opened_from() {
+        with_conversation(|shell, t| {
+            press(shell, t, Key::Softkey(Softkey::Right));
+            assert!(shell.app().on_chat_list());
+            assert_eq!(shell.app().chats_selected, 0);
         });
     }
 
