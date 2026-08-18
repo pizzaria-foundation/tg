@@ -41,6 +41,7 @@
 use std::process::ExitCode;
 
 use symbian_decl_ui::layout;
+use symbian_decl_ui::outbox::Outbox;
 use symbian_decl_ui::slot::SlotTable;
 use symbian_gfx::{Canvas, Rect, E72_SCREEN};
 use symbian_preview::{Atlases, Parity};
@@ -123,9 +124,19 @@ fn render_by_hand(c: &mut Canvas<'_>, store: &Store, selected: usize, theme: &Th
 fn render_declared(c: &mut Canvas<'_>, store: &Store, selected: usize, theme: &Theme<'_>) {
     let mut slots = SlotTable::new();
     let mut cache = symbian_decl_ui::UiCache::new();
+    // The outbox is where the list reports a moved cursor and a request for another page. Nothing
+    // reads it here: this comparison is about pixels, and a screen drawn twice produces no keys.
+    let out = Outbox::new();
     for _ in 0..2 {
         slots.begin_frame();
-        let tree = tg::chats_decl::view(store, selected, &mut slots);
+        let tree = tg::chats_decl::view(
+            tg::chats_decl::rows(store),
+            store.dialogs_loading,
+            &store.status,
+            selected,
+            &out,
+            &mut slots,
+        );
         layout::draw_frame(&tree, Rect::from_size(E72_SCREEN), &mut cache, c, theme);
         slots.end_frame();
     }
