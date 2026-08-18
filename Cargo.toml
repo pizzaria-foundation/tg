@@ -25,15 +25,15 @@ tg-proto = { path = "proto" }
 # permission problem as a missing commit. Pinned by revision rather than by branch so a build
 # is reproducible: bump these deliberately, together, and run the device build before
 # trusting the result.
-symbian = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
-symbian-ui = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
-symbian-gfx = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
-symbian-sys = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
-symbian-app = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
-symbian-crypto = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
-symbian-sim = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
-symbian-preview = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
-symbian-decl-ui = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
+symbian = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "c92132676873ac02a39cb88ef42bffe61b59684b" }
+symbian-ui = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "c92132676873ac02a39cb88ef42bffe61b59684b" }
+symbian-gfx = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "c92132676873ac02a39cb88ef42bffe61b59684b" }
+symbian-sys = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "c92132676873ac02a39cb88ef42bffe61b59684b" }
+symbian-app = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "c92132676873ac02a39cb88ef42bffe61b59684b" }
+symbian-crypto = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "c92132676873ac02a39cb88ef42bffe61b59684b" }
+symbian-sim = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "c92132676873ac02a39cb88ef42bffe61b59684b" }
+symbian-preview = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "c92132676873ac02a39cb88ef42bffe61b59684b" }
+symbian-decl-ui = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "c92132676873ac02a39cb88ef42bffe61b59684b" }
 
 # Mirrors the SDK's device profile: small binaries matter on a phone with ~30 MB of usable
 # RAM and a ~100 KB-per-page demand loader.
@@ -91,9 +91,11 @@ tg-proto = { workspace = true }
 # for and what it has found.
 symbian-decl-ui = { workspace = true }
 
-# Local SDK checkout, for developing this app and the SDK together. The `rev` pins above remain the
-# source of truth and MUST be bumped to a commit that contains `symbian-decl-ui` before this builds
-# anywhere but this machine — the crate is not in the pinned revision at all.
+# Local SDK checkout, for developing this app and the SDK together — and it stays on this machine
+# whatever the pins say. The `rev` pins above are the source of truth for anyone else: they now point
+# at an SDK commit that carries every crate this app names, `symbian-decl-ui` included, so a clean
+# clone builds without these lines. Bump them together, and run the device build before trusting the
+# result — a host build cannot tell you that the ARM link still resolves.
 [patch."ssh://git@github.com/pizzaria-foundation/epoc"]
 symbian = { path = "../SDK/crates/symbian" }
 symbian-ui = { path = "../SDK/crates/symbian-ui" }
