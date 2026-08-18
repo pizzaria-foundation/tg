@@ -58,11 +58,11 @@ use symbian_decl_ui::cmd::Cmd;
 use symbian_decl_ui::keys::Softkeys;
 use symbian_decl_ui::outbox::Outbox;
 use symbian_decl_ui::slot::SlotTable;
-use symbian_decl_ui::widgets::{Imperative, Node};
+use symbian_decl_ui::widgets::Node;
 
-use symbian_ui::{App as _, Canvas, Handled, KeyEvent, Rect, Theme};
+use symbian_ui::{Canvas, Handled, KeyEvent, Rect, Theme};
 
-use crate::{chats_decl, conv_decl, login_decl};
+use crate::{chats_decl, conv_decl, login_decl, viewer_decl};
 use crate::App;
 
 /// Everything the application knows, which for now is the application.
@@ -90,6 +90,8 @@ pub enum Msg {
     Login(login_decl::Msg),
     /// The conversation said something.
     Conv(conv_decl::Msg),
+    /// The photo viewer said something.
+    Viewer(viewer_decl::Msg),
     /// Leave the application. The red key, from any screen.
     Exit,
     /// The imperative side ran; whatever it changed, the screen no longer describes the model.
@@ -133,6 +135,8 @@ impl DeclarativeApp for Tg {
             login_decl::softkeys(&login_decl::State::of(app.login_state())).map(Msg::Login)
         } else if let Some(conv) = app.conversation() {
             conv_decl::softkeys(conv.composer.is_empty()).map(Msg::Conv)
+        } else if app.viewer().is_some() {
+            viewer_decl::softkeys().map(Msg::Viewer)
         } else {
             Softkeys::new()
         }
@@ -161,6 +165,9 @@ impl DeclarativeApp for Tg {
         }
         if let Some(conv) = app.conversation() {
             return conv_decl::on_key(conv.focus, conv.composer.is_empty(), ev).map(Msg::Conv);
+        }
+        if app.viewer().is_some() {
+            return viewer_decl::on_key(ev).map(Msg::Viewer);
         }
         None
     }
@@ -252,6 +259,10 @@ impl DeclarativeApp for Tg {
                 }
                 Cmd::None
             }
+            Msg::Viewer(viewer_decl::Msg::Back) => {
+                app.viewer_back();
+                Cmd::None
+            }
         }
     }
 
@@ -297,23 +308,21 @@ impl DeclarativeApp for Tg {
             return conv_decl::view(&m.app, &m.out.wrapped(Msg::Conv));
         }
 
-        // Everything else, still hand-written, still what ships.
-        let touched = m.out.clone();
-        Node::leaf(
-            Imperative::new(m.app.clone(), |app, c, _rect, theme| app.draw(c, theme)).on_key(
-                move |app: &mut App, ev: KeyEvent, rect: Rect, cx| {
-                    let handled = app.handle_key(ev, cx.theme, rect);
-                    // A key a widget consumed does not rebuild the view — which is correct for a
-                    // caret and wrong here, because the old screen may have just navigated. Saying
-                    // so costs one message; not saying it once cost a blank screen on the way out
-                    // of a conversation, since the chat list has no adapter to draw.
-                    if handled == Handled::Consumed {
-                        touched.push(Msg::Touched);
-                    }
-                    handled
-                },
-            ),
-        )
+        if let Some(viewer) = app.viewer() {
+            let viewer = viewer.clone();
+            drop(app);
+            return viewer_decl::view(&viewer, &m.out.wrapped(Msg::Viewer));
+        }
+
+        // Nothing left behind the adapter.
+        //
+        // Every screen this application has is above, and the four of them are the whole of its
+        // `Screen` enum — so this is unreachable, and it is a blank frame rather than an
+        // `unreachable!()` because a panic on a phone whose entire failure report is a dialog with a
+        // number in it is not worth being right about. `widgets::Imperative` was what made the
+        // migration possible one screen at a time and is no longer part of this app; the `RefCell`
+        // around the model stays until the store itself becomes one.
+        Node::leaf(symbian_decl_ui::widgets::Spacer::new())
     }
 }
 
@@ -445,7 +454,8 @@ mod tests {
     use super::*;
     use symbian_gfx::Size;
     use alloc::string::ToString;
-    use symbian_ui::{Key, Softkey};
+    // The trait, for `draw`/`handle_key`/`should_exit` on the shell — which is what a host calls.
+    use symbian_ui::{App as _, Key, Softkey};
 
     const SCREEN: Size = Size::new(320, 240);
 

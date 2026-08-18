@@ -23,6 +23,8 @@ pub mod chats_decl;
 pub mod conv;
 /// The conversation described around a transcript that is still drawn by hand. See the module header.
 pub mod conv_decl;
+/// The photo viewer, described around the toolkit's own viewer widget. See the module header.
+pub mod viewer_decl;
 /// The application as model-update-view, with the screens that are still hand-written behind an
 /// adapter. See the module header for the shape of the migration.
 pub mod mvu;
@@ -30,7 +32,7 @@ pub mod store_cache;
 pub mod model;
 
 use alloc::string::String;
-use symbian_ui::{Canvas, Handled, KeyEvent, Rect, Theme};
+use symbian_ui::Handled;
 
 use conv::Conversation;
 use login::Login;
@@ -64,7 +66,7 @@ enum Screen {
     /// is the conversation it was opened from: the viewer itself is the SDK's and knows
     /// nothing about chats, and backing out has to return to the transcript rather than to
     /// the chat list, which would lose the reader's place.
-    Viewer(symbian_ui::Viewer, usize),
+    Viewer(viewer_decl::Shared, usize),
 }
 
 /// What to do with a link after asking the launcher to take it.
@@ -287,65 +289,16 @@ impl App {
         }
     }
 
-    fn on_key(&mut self, ev: KeyEvent, theme: &Theme<'_>, screen_rect: Rect) -> Handled {
-        // The red End key closes the app, from any screen and with any text half-typed.
-        // Handled here rather than left to Avkon: the toolkit's own path only fires when
-        // every widget below has returned `Ignored`, and the conversation's editor consumes
-        // whatever it is given — which is why red did nothing at all with a chat open.
-        //
-        // Before the screen match for the same reason: nothing gets to swallow it first.
-        if ev.key == symbian_ui::Key::End {
-            symbian::log!("[act] end key: exit");
-            self.should_exit = true;
-            return Handled::Consumed;
-        }
-
-        match &mut self.screen {
-            // The login screens do not arrive here any more either.
-            //
-            // They are `login_decl`, routed by `mvu::Tg`: the softkeys and the green key through
-            // `login_decl::on_key`, the typing through the field in the tree. What used to be in this
-            // arm — a `LoginAction` turned into a call on the machine and then on the driver — is
-            // `App::login_submit` and its two neighbours below, which is where the driver already
-            // lives.
-            Screen::Login => Handled::Ignored,
-            // The dialog list does not arrive here any more.
-            //
-            // Its keys are routed by `mvu::Tg` — `chats_decl::on_key` for the softkeys and the
-            // green key, the list widget itself for navigation and for the request for another
-            // page — and this function is only reached through the adapter that wraps the screens
-            // still written by hand. There is no adapter on the chat list, so there is no path to
-            // this arm; `Ignored` rather than `unreachable!()`, because a panic on a phone whose
-            // whole failure report is a dialog with a number in it is not worth being right about.
-            Screen::Chats => Handled::Ignored,
-            // The conversation does not arrive here any more.
-            //
-            // Its chrome is `conv_decl` and its transcript is a leaf inside that tree; the keys the
-            // screen does not claim reach `Conversation::handle_key_in` through the widget, and the
-            // actions it returns come back as messages. What was in this arm — a `ConvAction` turned
-            // into a call on the store, the cache or the launcher — is `App::conversation_action`
-            // below, called from `update`, which is where the driver and the filesystem already are.
-            Screen::Conversation(_) => Handled::Ignored,
-            Screen::Viewer(v, from_chat) => {
-                let area = symbian_ui::Viewer::content(screen_rect, theme);
-                let (handled, action) = v.handle_key(ev, area);
-                match action {
-                    symbian_ui::ViewerAction::Back => {
-                        // Back to the conversation the photo was opened from. Dropping to
-                        // the chat list instead loses the reader's place in a transcript
-                        // they may have scrolled a long way into.
-                        let chat = *from_chat;
-                        self.screen = match self.store.chats.get(chat) {
-                            Some(_) => Screen::Conversation(Conversation::new(chat)),
-                            None => Screen::Chats,
-                        };
-                        Handled::Consumed
-                    }
-                    symbian_ui::ViewerAction::None => handled,
-                }
-            }
-        }
-    }
+    /// A key from the platform — no longer this type's business.
+    ///
+    /// Every screen this application has is declared now: the dialog list, the three login screens,
+    /// the conversation and the photo viewer. Keys arrive at `mvu::Tg`, which routes them by screen
+    /// through the four `*_decl` modules, and what used to be the arms of this function are the
+    /// methods above — `open_chat`, `login_submit`, `conversation_action`, `viewer_back` — called from
+    /// `update`, which is where the driver and the filesystem already lived.
+    ///
+    /// The function is gone rather than left returning `Ignored`, because a key handler that ignores
+    /// everything is a place a future key will be added by mistake.
 
     /// Append an outgoing message locally. Real sending is asynchronous, so the
     /// message appears as `Pending` and the transport later promotes it to `Sent`
@@ -643,6 +596,27 @@ impl App {
     pub(crate) fn conversation_mut(&mut self) -> Option<&mut conv::Conversation> {
         match &mut self.screen {
             Screen::Conversation(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// Leave the photo, back to where it was opened from.
+    ///
+    /// Back to the conversation rather than the chat list: dropping to the list loses the reader's
+    /// place in a transcript they may have scrolled a long way into.
+    pub(crate) fn viewer_back(&mut self) {
+        let Screen::Viewer(_, from_chat) = &self.screen else { return };
+        let chat = *from_chat;
+        self.screen = match self.store.chats.get(chat) {
+            Some(_) => Screen::Conversation(Conversation::new(chat)),
+            None => Screen::Chats,
+        };
+    }
+
+    /// The viewer in front, if one is.
+    pub(crate) fn viewer(&self) -> Option<&viewer_decl::Shared> {
+        match &self.screen {
+            Screen::Viewer(v, _) => Some(v),
             _ => None,
         }
     }
@@ -1263,7 +1237,8 @@ impl App {
                     symbian::image::resample(&img, w, h)
                 };
                 let size = symbian_ui::Size::new(shown.width, shown.height);
-                self.screen = Screen::Viewer(symbian_ui::Viewer::new(shown.pixels, size), chat);
+                let viewer = symbian_ui::Viewer::new(shown.pixels, size);
+                self.screen = Screen::Viewer(alloc::rc::Rc::new(core::cell::RefCell::new(viewer)), chat);
             }
             Err(e) => {
                 symbian::log!("[media] decode result unavailable");
@@ -1302,30 +1277,11 @@ impl App {
         }
     }
 
-    fn paint(&mut self, c: &mut Canvas<'_>, theme: &Theme<'_>) {
-        match &mut self.screen {
-            // Nothing: the login screens are a declarative tree the bridge draws, and this function
-            // is only reached through the adapter around the screens still written by hand.
-            Screen::Login => {}
-            // Nothing: the dialog list is a declarative tree that the bridge draws directly, and
-            // this function is only called through the adapter around the hand-written screens. See
-            // the `Screen::Chats` variant.
-            Screen::Chats => {}
-            // Nothing: the conversation is a declarative tree the bridge draws — `conv_decl` — and
-            // this function is only reached through the adapter around the screens still written by
-            // hand. `Conversation::draw` is still the reference the comparison measures against.
-            Screen::Conversation(_) => {}
-            // The strings are the app's: the SDK's viewer ships no text.
-            Screen::Viewer(v, _) => v.draw(c, theme, "Foto", "Voltar"),
-        }
-    }
-
     /// Whether the dialog list is what is in front.
     ///
-    /// Asked by [`mvu`](crate::mvu) on every key and every view: it is the one branch that decides
-    /// whether a screen is described declaratively or reached through the adapter. A method rather
-    /// than a public `screen` field, because the enum is this module's business and the answer is
-    /// the only part of it anyone outside needs.
+    /// Asked by [`mvu`](crate::mvu) on every key and every view: it is one of the four branches that
+    /// decide which screen is described. A method rather than a public `screen` field, because the
+    /// enum is this module's business and the answer is the only part of it anyone outside needs.
     pub(crate) fn on_chat_list(&self) -> bool {
         matches!(self.screen, Screen::Chats)
     }
@@ -1370,20 +1326,19 @@ fn drive(
     }
 }
 
-/// The SDK's application contract. Everything that runs this app — the device entry
-/// points and the host simulator — goes through here, so neither needs to know the
-/// concrete type.
-impl symbian_ui::App for App {
-    fn handle_key(&mut self, ev: KeyEvent, theme: &Theme<'_>, screen: Rect) -> Handled {
-        self.on_key(ev, theme, screen)
-    }
-
+/// What the platform sends that is not a key.
+///
+/// This type used to implement [`symbian_ui::App`] — it *was* the application. It is the model now,
+/// and `mvu::Shell` is what the hosts run: keys and frames go through the bridge, which routes them to
+/// the declared screens. The one thing that never belonged to a screen is still here, because it never
+/// belonged to a screen: the driver's completions.
+impl App {
     /// Everything the network and the worker thread do arrives here.
     ///
     /// The shim delivers socket completions, timer ticks and worker results as raw events;
     /// `Driver` turns them into progress and this decides what the screen becomes. Returning
     /// `Ignored` for events nobody claimed lets the toolkit handle its own.
-    fn handle_raw(&mut self, ev: &symbian_ui::RawEvent) -> Handled {
+    pub(crate) fn handle_raw(&mut self, ev: &symbian_ui::RawEvent) -> Handled {
         let now = symbian::unix_time();
 
         // The dev bridge runs on its own sockets, independent of the driver's, and
@@ -1558,25 +1513,14 @@ still active={} mode={} flags={} done={} error={}",
         }
     }
 
-    fn draw(&mut self, c: &mut Canvas<'_>, theme: &Theme<'_>) {
-        self.paint(c, theme)
-    }
-
-    fn should_exit(&self) -> bool {
-        self.should_exit
-    }
-
-    fn title(&self) -> &str {
-        "Telegram"
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    // App is imported for its methods: handle_key and draw are trait methods now, so the
-    // trait has to be in scope to call them.
-    use symbian_ui::{App as _, BitmapFont, Fonts, Key, Size, Softkey, TextField};
+    // The trait is in scope for the *shell*: `handle_key`, `draw` and `should_exit` are what a host
+    // calls, and the shell is what the hosts run. `App` itself no longer implements it.
+    use symbian_ui::{App as _, BitmapFont, Canvas, Fonts, Key, KeyEvent, Rect, Size, Softkey, TextField, Theme};
 
     fn atlas() -> alloc::vec::Vec<u8> {
         let chars: alloc::vec::Vec<char> = (0x20u32..0x500).filter_map(char::from_u32).collect();

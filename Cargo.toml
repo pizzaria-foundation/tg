@@ -117,3 +117,10 @@ test = true
 [[example]]
 name = "login_parity"
 test = true
+
+# And the viewer's. The conversation's lives in `src/conv_decl.rs` instead — its state cannot be
+# assembled from outside the crate, and inventing constructors so a comparison can exist is how a
+# test starts deciding what the code looks like.
+[[example]]
+name = "viewer_parity"
+test = true
