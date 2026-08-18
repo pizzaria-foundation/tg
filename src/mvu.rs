@@ -62,7 +62,7 @@ use symbian_decl_ui::widgets::{Imperative, Node};
 
 use symbian_ui::{App as _, Canvas, Handled, KeyEvent, Rect, Theme};
 
-use crate::chats_decl;
+use crate::{chats_decl, login_decl};
 use crate::App;
 
 /// Everything the application knows, which for now is the application.
@@ -86,6 +86,8 @@ impl Model {
 pub enum Msg {
     /// The dialog list said something.
     Chats(chats_decl::Msg),
+    /// A login screen said something.
+    Login(login_decl::Msg),
     /// The imperative side ran; whatever it changed, the screen no longer describes the model.
     ///
     /// Deliberately carries nothing. It is not an event, it is an admission — the old code changed
@@ -123,6 +125,8 @@ impl DeclarativeApp for Tg {
         let app = m.app.borrow();
         if app.on_chat_list() {
             chats_decl::softkeys(app.store.dialogs_loading).map(Msg::Chats)
+        } else if app.on_login() {
+            login_decl::softkeys(&login_decl::State::of(app.login_state())).map(Msg::Login)
         } else {
             Softkeys::new()
         }
@@ -132,10 +136,13 @@ impl DeclarativeApp for Tg {
         // Only the dialog list is claimed at this level. `None` for everything else is what lets the
         // key reach the adapter — the bridge asks the app first, so an arm here would win.
         let app = m.app.borrow();
-        if !app.on_chat_list() {
-            return None;
+        if app.on_chat_list() {
+            return chats_decl::on_key(app.store.dialogs_loading, ev).map(Msg::Chats);
         }
-        chats_decl::on_key(app.store.dialogs_loading, ev).map(Msg::Chats)
+        if app.on_login() {
+            return login_decl::on_key(&login_decl::State::of(app.login_state()), ev).map(Msg::Login);
+        }
+        None
     }
 
     fn outbox(m: &Model) -> Option<&Outbox<Msg>> {
@@ -177,6 +184,25 @@ impl DeclarativeApp for Tg {
                 // asks — `should_exit` — is answered by both halves. See [`Shell::should_exit`].
                 chats_decl::Msg::Quit => Cmd::Exit,
             },
+            Msg::Login(l) => match l {
+                // What to submit is the login machine's to decide — this key only says that the
+                // middle softkey was pressed.
+                login_decl::Msg::Submit => {
+                    app.login_submit();
+                    Cmd::None
+                }
+                login_decl::Msg::BackToPhone => {
+                    app.login_back_to_phone();
+                    Cmd::None
+                }
+                login_decl::Msg::ToggleMask => {
+                    app.login_toggle_mask();
+                    Cmd::None
+                }
+                // Back on the phone screen means leaving the application, which is what the
+                // hand-written screen did with an unlabelled key. See `login_decl::on_key`.
+                login_decl::Msg::Quit => Cmd::Exit,
+            },
         }
     }
 
@@ -200,6 +226,19 @@ impl DeclarativeApp for Tg {
                 &m.out.wrapped(Msg::Chats),
                 slots,
             );
+        }
+
+        if app.on_login() {
+            // The field's buffer belongs to the login machine, which is where the application can
+            // still read it when the middle softkey says to submit — see `login::Field`. A waiting
+            // screen has no field, and `login_decl` does not draw one, so a throwaway buffer is
+            // honest here: nothing types into it and nothing reads it.
+            let state = login_decl::State::of(app.login_state());
+            let field = app
+                .login_state()
+                .field()
+                .unwrap_or_else(|| crate::login::shared(symbian_ui::TextField::new()));
+            return login_decl::view(&state, &field, slots);
         }
 
         // Everything else, still hand-written, still what ships.
@@ -244,7 +283,27 @@ impl Shell {
     pub fn new(app: App) -> Self {
         let model = Model::new(app);
         let app = model.app.clone();
-        Self { bridge: DeclarativeAppBridge::with_model(model), app }
+        Self {
+            // The clipboard is the bridge's to hold, and giving it one is not optional: the
+            // declarative field pastes through `KeyCtx`, and the hand-written login screen reached
+            // for `symbian_app::SystemClipboard` directly. Without this line the login field would be
+            // the one field on the phone that cannot paste — silently, since paste into an empty
+            // clipboard looks exactly the same.
+            bridge: DeclarativeAppBridge::with_model(model)
+                .with_clipboard(symbian_app::SystemClipboard),
+            app,
+        }
+    }
+
+    /// Use a different clipboard than the platform's.
+    ///
+    /// The device wants `symbian_app::SystemClipboard` and gets it from [`Self::new`]. The *simulator*
+    /// does not have one — the host's clipboard is not reachable through the shim — so a
+    /// `MemClipboard` there makes copy and paste work between two fields on the same screen, which is
+    /// enough to exercise every line of the editing path without a handset.
+    pub fn with_clipboard(mut self, clip: impl symbian_ui::Clipboard + 'static) -> Self {
+        self.bridge.set_clipboard(clip);
+        self
     }
 
     /// The application inside, to read. For tests and for the shim's title handling.
@@ -427,6 +486,100 @@ mod tests {
             assert!(!shell.should_exit());
             press(shell, t, Key::Softkey(Softkey::Right));
             assert!(shell.should_exit());
+        });
+    }
+
+    // ---- the login screens ------------------------------------------------------------------------
+
+    /// A shell on the login screen, with a frame drawn.
+    fn with_login(f: impl FnOnce(&mut Shell, &Theme<'_>)) {
+        let atlases = symbian_preview::Atlases::load();
+        let mut ran = false;
+        atlases.with_themes(|dark, _light| {
+            let mut shell = mock_login();
+            // `Login::new` starts on the waiting screen, because the network is not ready on launch
+            // and a number field that cannot be used reads as a broken screen. The test wants the
+            // phone screen, which is what `show_phone` is for.
+            shell.with_app(|a| a.show_phone_for_test());
+            frame(&mut shell, dark);
+            f(&mut shell, dark);
+            ran = true;
+        });
+        assert!(ran, "the atlases did not yield a theme");
+    }
+
+    #[test]
+    fn typing_reaches_the_phone_field_and_a_letter_does_not() {
+        // The first screen whose keys go all the way through the tree: the softkeys are the app's and
+        // everything else belongs to the field. The digits filter lives in the buffer, so it holds
+        // for a paste as well as for a keystroke.
+        with_login(|shell, t| {
+            for ch in "1a2".chars() {
+                press(shell, t, Key::Char(ch));
+            }
+            let field = shell.app().login_state().field().expect("the phone screen has a field");
+            assert_eq!(field.borrow().text(), "12", "a letter reached a digits-only field");
+        });
+    }
+
+    #[test]
+    fn the_middle_softkey_submits_what_was_typed() {
+        // And the application reads it out of the buffer it holds, in `update`, where there is no
+        // widget to ask — which is the whole reason the field is an `Rc` and not a slot.
+        with_login(|shell, t| {
+            for ch in "11999990000".chars() {
+                press(shell, t, Key::Char(ch));
+            }
+            press(shell, t, Key::Select);
+            // Nothing behind the mock, so the machine parks on its waiting screen — which is what
+            // says the number was submitted rather than swallowed.
+            assert!(shell.app().login_state().is_waiting(), "the number was not submitted");
+        });
+    }
+
+    #[test]
+    fn a_key_the_login_screen_does_not_want_is_left_alone() {
+        with_login(|shell, t| {
+            assert_eq!(press(shell, t, Key::Up), Handled::Ignored);
+            assert_eq!(press(shell, t, Key::Down), Handled::Ignored);
+        });
+    }
+
+    #[test]
+    fn the_password_screen_toggles_its_own_mask() {
+        with_login(|shell, t| {
+            shell.with_app(|a| a.show_password_for_test("dica"));
+            frame(shell, t);
+            let field = shell.app().login_state().field().expect("the password screen has a field");
+            for ch in "hunter2".chars() {
+                press(shell, t, Key::Char(ch));
+            }
+            assert_eq!(field.borrow().display(), "*******");
+            press(shell, t, Key::Softkey(Softkey::Left));
+            assert_eq!(field.borrow().display(), "hunter2", "the eye did not open");
+            press(shell, t, Key::Softkey(Softkey::Left));
+            assert_eq!(field.borrow().display(), "*******");
+        });
+    }
+
+    #[test]
+    fn the_field_pastes_because_the_shell_hands_the_bridge_a_clipboard() {
+        // A regression waiting to happen. The hand-written screen reached for
+        // `symbian_app::SystemClipboard` itself; a declarative field pastes through `KeyCtx`, which
+        // holds `NoClipboard` unless the shell hands one over — so the symptom would have been a login
+        // field that silently cannot paste, indistinguishable from an empty clipboard.
+        let atlases = symbian_preview::Atlases::load();
+        atlases.with_themes(|dark, _light| {
+            let mut shell = mock_login()
+                .with_clipboard(symbian_ui::MemClipboard::with_text("+55 21 99999-0000"));
+            shell.with_app(|a| a.show_phone_for_test());
+            frame(&mut shell, dark);
+
+            assert_eq!(press(&mut shell, dark, Key::Ctrl('v')), Handled::Consumed);
+            let field = shell.app().login_state().field().unwrap();
+            // The digits filter is inside the buffer, so the punctuation and the leading `+` — which
+            // the screen draws rather than stores — are dropped on the way in.
+            assert_eq!(field.borrow().text(), "5521999990000");
         });
     }
 

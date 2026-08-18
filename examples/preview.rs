@@ -8,6 +8,12 @@
 //! PNG writer — is `symbian-preview`. What lives here is only the scenes: which screen, in
 //! which theme, after which keys. They belong next to the code they document, which is why
 //! they are not in the SDK.
+//!
+//! The chat list and the conversation are reached through `tg::mvu::mock()`, which is what the device
+//! runs. The login shots still build a `login::Login` and draw it directly, and that is not a
+//! leftover: those screens are pixel-for-pixel identical to the declarative ones — asserted in
+//! `examples/login_parity.rs`, in seventeen states — and the imperative side is the one with a
+//! constructor for every screen, including the two only a server can produce.
 
 // handle_key and draw are trait methods; the trait must be in scope to call them.
 use symbian_ui::App as _;
@@ -100,20 +106,20 @@ fn render(dark: &symbian_ui::Theme<'_>, light: &symbian_ui::Theme<'_>) {
             s.save(OUT, name);
         };
         shot_login("17-login-phone", dark, Ls::Phone {
-            field: symbian_ui::TextField::with_limit(16),
+            field: tg::login::shared(symbian_ui::TextField::with_limit(16)),
             error: None,
         });
         shot_login("18-login-code", dark, Ls::Code {
-            field: symbian_ui::TextField::with_limit(8),
+            field: tg::login::shared(symbian_ui::TextField::with_limit(8)),
             length: Some(5),
             error: None,
         });
         shot_login("19-login-password", dark, Ls::Password {
-            field: {
+            field: tg::login::shared({
                 let mut f = symbian_ui::TextField::with_limit(128);
                 f.set_masked(true);
                 f
-            },
+            }),
             hint: String::from("dica do usuário"),
             error: None,
         });

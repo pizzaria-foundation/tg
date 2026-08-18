@@ -4,25 +4,41 @@
 //! [`tg_proto::auth::Login`] machine drives the protocol; this module draws what it
 //! says and hands the actions back to the caller, which owns the network.
 
+use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::cell::RefCell;
 
 use symbian_ui::{
-    chrome, paint, Align, Canvas, Frame, Handled, Key, KeyEvent, Rect, Softkey, TextField, Theme,
+    chrome, Align, Canvas, Frame, Handled, Key, KeyEvent, Rect, Softkey, TextField, Theme,
 };
 
 use tg_proto::auth::{self, Action, AuthError};
 use tg_proto::crypto::Rng;
 
+/// A field the screen and the application both hold.
+///
+/// An `Rc<RefCell<..>>` and not a `TextField` by value, and the reason is the declarative screen: its
+/// submit key is a *softkey*, so it is answered by the application and turned into a message, and by
+/// the time `update` runs there is no widget in hand to read the text from. The application keeps a
+/// handle on the buffer instead — see `symbian_decl_ui::widgets::TextField::with_buffer`. One buffer
+/// serves both screens, which is what stops the number on one from being a stale copy of the other.
+pub type Field = Rc<RefCell<TextField>>;
+
+/// Wrap a freshly built field so both sides can hold it.
+pub fn shared(field: TextField) -> Field {
+    Rc::new(RefCell::new(field))
+}
+
 #[derive(Clone, Debug)]
 pub enum Screen {
     /// The user types a phone number. A fixed `+` is shown before the field because
     /// the E72's Fn layer cannot produce it yet — digits only.
-    Phone { field: TextField, error: Option<String> },
+    Phone { field: Field, error: Option<String> },
     /// The user types the code the server sent.
-    Code { field: TextField, length: Option<i32>, error: Option<String> },
+    Code { field: Field, length: Option<i32>, error: Option<String> },
     /// The user types their two-factor password.
-    Password { field: TextField, hint: String, error: Option<String> },
+    Password { field: Field, hint: String, error: Option<String> },
     /// Waiting for the network or worker.
     Waiting(&'static str),
 }
@@ -109,6 +125,29 @@ impl Login {
         }
     }
 
+    /// [`Self::for_preview`], for a build that has credentials.
+    ///
+    /// `for_preview` has none — `api_id` is zero — so its phone screen says "sem api_id" in place of
+    /// its error line. That is the right default for a preview of a development build and the wrong
+    /// one for a comparison about anything else, so the two are separate constructors rather than a
+    /// flag nobody would notice.
+    pub fn for_preview_with_credentials(screen: Screen) -> Self {
+        let mut me = Self::for_preview(screen);
+        me.api_id = 1;
+        me.api_hash_empty = false;
+        me
+    }
+
+    /// Say whether the connection is ready.
+    ///
+    /// The field is the crate's, written by the driver's status on every event. This is for a host
+    /// outside the crate — the comparison harness — which needs both answers and has no driver to
+    /// produce them: an unready connection hides the middle softkey, and a screen compared in only
+    /// one of the two states leaves the other unproven.
+    pub fn set_connected(&mut self, on: bool) {
+        self.connected = on;
+    }
+
     /// Whether this build can log in at all.
     ///
     /// `api_id` and `api_hash` identify the application and come from `api.conf`, which is
@@ -170,6 +209,98 @@ impl Login {
         self.machine.phone()
     }
 
+    /// The field the screen in front is editing, if it has one.
+    ///
+    /// A handle, not a copy: the declarative screen edits through it and the application reads it
+    /// when a softkey says to submit. See [`Field`].
+    pub(crate) fn field(&self) -> Option<Field> {
+        match &self.screen {
+            Screen::Phone { field, .. }
+            | Screen::Code { field, .. }
+            | Screen::Password { field, .. } => Some(field.clone()),
+            Screen::Waiting(_) => None,
+        }
+    }
+
+    /// Submit whatever the screen in front is for.
+    ///
+    /// One function rather than three at the call site, because *which* submit belongs to a screen is
+    /// this module's business — the application only knows that the middle key was pressed. It also
+    /// keeps the logging here: the phone number is redacted and the code is reduced to a digit count,
+    /// and a caller reconstructing that by hand is a credential in a log file waiting to happen.
+    ///
+    /// `None` when there is nothing to submit, which is the waiting screen.
+    pub(crate) fn submit_current(&mut self) -> Option<Progress> {
+        match &self.screen {
+            Screen::Phone { field, .. } => {
+                let number = alloc::format!("+{}", field.borrow().text());
+                symbian::log!("[act] send code to {}", symbian::log::redact_phone(&number));
+                symbian::log!("ACTION send_code len={}", number.chars().count());
+                Some(self.ask_send_code(&number))
+            }
+            Screen::Code { field, .. } => {
+                let code = field.borrow().text().to_string();
+                // The length, not the code. A five-digit code in a log is a live credential for the
+                // next few minutes.
+                symbian::log!("[act] submit code digits={}", code.chars().count());
+                Some(self.submit_code(&code))
+            }
+            Screen::Password { field, .. } => {
+                let pw = field.borrow().text().as_bytes().to_vec();
+                symbian::log!("[act] submit password");
+                Some(self.submit_password(&pw))
+            }
+            Screen::Waiting(_) => None,
+        }
+    }
+
+    /// Back to the phone number, with an empty field.
+    ///
+    /// Empty and not pre-filled, which is what the hand-written code screen's "Voltar" did — and it
+    /// disagrees with [`Self::show_phone`] and [`Self::set_error`], which come back through
+    /// `make_phone_screen` and *do* pre-fill from the last number. That inconsistency is the
+    /// original's and is kept on purpose: it is behaviour, a pixel comparison cannot see it, and
+    /// "improved while translating" is how a migration stops being a migration. Worth fixing
+    /// deliberately, separately, and with the number restored on both paths.
+    pub(crate) fn back_to_phone(&mut self) {
+        self.screen = Screen::Phone { field: shared(digits_field(16)), error: None };
+    }
+
+    /// Show or hide the password. Does nothing on any other screen.
+    pub(crate) fn toggle_mask(&mut self) {
+        if let Screen::Password { field, .. } = &self.screen {
+            let masked = field.borrow().is_masked();
+            field.borrow_mut().set_masked(!masked);
+        }
+    }
+
+    /// Whether this login is parked on its waiting screen.
+    ///
+    /// The one thing a caller outside can ask that says "the request went out": every submit moves
+    /// the machine here while it waits for the server.
+    pub(crate) fn is_waiting(&self) -> bool {
+        matches!(self.screen, Screen::Waiting(_))
+    }
+
+    /// Put the password screen up, for a test.
+    ///
+    /// The real transition comes from `Action::NeedPassword`, which needs a server. Everything else
+    /// about the screen — the masked field, the hint — is built exactly as `apply` builds it, so a
+    /// test drives the same screen the protocol produces.
+    #[cfg(test)]
+    pub(crate) fn show_password_for_test(&mut self, hint: &str) {
+        self.password_needed = true;
+        self.screen = Screen::Password {
+            field: shared({
+                let mut f = TextField::with_limit(128);
+                f.set_masked(true);
+                f
+            }),
+            hint: String::from(hint),
+            error: None,
+        };
+    }
+
     /// Whether the caller is now authorized.
     pub fn is_authorized(&self) -> bool {
         self.machine.is_done()
@@ -187,7 +318,7 @@ impl Login {
         if !self.phone.is_empty() {
             field.insert_str(&self.phone);
         }
-        Screen::Phone { field, error }
+        Screen::Phone { field: shared(field), error }
     }
 
     /// Ask for another code.
@@ -245,11 +376,11 @@ impl Login {
             Action::NeedPassword { hint } => {
                 self.password_needed = true;
                 self.screen = Screen::Password {
-                    field: {
+                    field: shared({
                         let mut f = TextField::with_limit(128);
                         f.set_masked(true);
                         f
-                    },
+                    }),
                     hint: hint.clone(),
                     error: None,
                 };
@@ -258,7 +389,7 @@ impl Login {
             Action::CodeSent { length } => {
                 self.code_sent = true;
                 self.screen = Screen::Code {
-                    field: digits_field(8),
+                    field: shared(digits_field(8)),
                     length: *length,
                     error: None,
                 };
@@ -330,7 +461,7 @@ impl Login {
                 };
                 draw_field_centered(
                     c, frame.content, theme, "Número de telefone",
-                    Some("+"), Some("11 999999999"), field, line,
+                    Some("+"), Some("11 999999999"), &field.borrow(), line,
                 );
                 chrome::softkey_bar(
                     c, frame.softkeys, theme,
@@ -344,7 +475,7 @@ impl Login {
                 );
                 draw_field_centered(
                     c, frame.content, theme, "Código",
-                    None, Some("código"), field, error.as_deref(),
+                    None, Some("código"), &field.borrow(), error.as_deref(),
                 );
                 let hint = match length {
                     Some(n) => {
@@ -378,11 +509,12 @@ impl Login {
                 chrome::title_bar(
                     c, frame.title, theme, "Telegram", Some("senha"),
                 );
+                let masked = field.borrow().is_masked();
                 let field_r = draw_field_centered(
                     c, frame.content, theme, "Senha de dois fatores",
-                    None, Some("senha"), field, error.as_deref(),
+                    None, Some("senha"), &field.borrow(), error.as_deref(),
                 );
-                draw_eye(c, frame.content, field_r, theme, !field.is_masked());
+                draw_eye(c, frame.content, field_r, theme, !masked);
                 if !hint.is_empty() {
                     c.draw_text_in(
                         Rect::from_xywh(
@@ -404,7 +536,7 @@ impl Login {
                         // The only way to reveal a password on a handset with no touch
                         // screen. The label says what pressing it will do, not what the
                         // field is doing now — a softkey is a verb.
-                        Some(if field.is_masked() { "Mostrar" } else { "Ocultar" }),
+                        Some(if masked { "Mostrar" } else { "Ocultar" }),
                         if self.connected { Some("Entrar") } else { None },
                         None,
                     ],
@@ -452,7 +584,7 @@ fn handle_screen_key(
             match ev.key {
                 Key::Softkey(Softkey::Right) => {
                     *screen = Screen::Phone {
-                        field: digits_field(16),
+                        field: shared(digits_field(16)),
                         error: None,
                     };
                     (Handled::Consumed, LoginAction::None)
@@ -461,13 +593,13 @@ fn handle_screen_key(
             }
         }
         Screen::Phone { field, .. } => {
-            let handled = handle_field(field, ev);
+            let handled = handle_field(&mut field.borrow_mut(), ev);
             if handled.is_consumed() {
                 return (handled, LoginAction::None);
             }
             match ev.key {
                 Key::Softkey(Softkey::Middle) | Key::Enter | Key::Select | Key::Call => {
-                    let number = alloc::format!("+{}", field.text());
+                    let number = alloc::format!("+{}", field.borrow().text());
                     (Handled::Consumed, LoginAction::SendCode(number))
                 }
                 Key::Softkey(Softkey::Right) => {
@@ -477,18 +609,18 @@ fn handle_screen_key(
             }
         }
         Screen::Code { field, .. } => {
-            let handled = handle_field(field, ev);
+            let handled = handle_field(&mut field.borrow_mut(), ev);
             if handled.is_consumed() {
                 return (handled, LoginAction::None);
             }
             match ev.key {
                 Key::Softkey(Softkey::Middle) | Key::Enter | Key::Select | Key::Call => {
-                    let code = field.text().to_string();
+                    let code = field.borrow().text().to_string();
                     (Handled::Consumed, LoginAction::SubmitCode(code))
                 }
                 Key::Softkey(Softkey::Right) => {
                     *screen = Screen::Phone {
-                        field: digits_field(16),
+                        field: shared(digits_field(16)),
                         error: None,
                     };
                     (Handled::Consumed, LoginAction::None)
@@ -499,17 +631,17 @@ fn handle_screen_key(
         Screen::Password { field, .. } => {
             // Before the field sees it: the left softkey is not text.
             if matches!(ev.key, Key::Softkey(Softkey::Left)) {
-                let masked = field.is_masked();
-                field.set_masked(!masked);
+                let masked = field.borrow().is_masked();
+                field.borrow_mut().set_masked(!masked);
                 return (Handled::Consumed, LoginAction::None);
             }
-            let handled = handle_field(field, ev);
+            let handled = handle_field(&mut field.borrow_mut(), ev);
             if handled.is_consumed() {
                 return (handled, LoginAction::None);
             }
             match ev.key {
                 Key::Softkey(Softkey::Middle) | Key::Enter | Key::Select | Key::Call => {
-                    let pw = field.text().as_bytes().to_vec();
+                    let pw = field.borrow().text().as_bytes().to_vec();
                     (Handled::Consumed, LoginAction::SubmitPassword(pw))
                 }
                 _ => none,
@@ -550,12 +682,11 @@ fn draw_field_centered(
 ) -> Rect {
     let p = &theme.palette;
     let m = &theme.metrics;
-    let body = theme.fonts.body;
     let title_font = theme.fonts.title;
 
     // Centre vertically: title, gap, field, gap, hint/error.
     let title_h = title_font.line_height();
-    let field_h = body.line_height() + 8;
+    let field_h = chrome::text_field_height(theme);
     let err_h = if error.is_some() { theme.fonts.small.line_height() + 4 } else { 0 };
     let total = title_h + 8 + field_h + err_h;
     let y0 = area.y0 + (area.height() - total) / 2;
@@ -575,69 +706,18 @@ fn draw_field_centered(
     let field_x0 = area.x0 + (area.width() - field_bg) / 2;
     let field_r = Rect::from_xywh(field_x0, field_y, field_bg, field_h);
 
-    paint::band(c, field_r, &p.chrome);
-
-    // Prefix (the fixed +)
-    let mut text_x = field_r.x0 + 6;
-    if let Some(pre) = prefix {
-        c.draw_text(
-            symbian_ui::Point::new(text_x, field_r.y0 + 3 + body.ascent()),
-            pre,
-            body,
-            p.dim,
-        );
-        text_x += body.measure(pre) + 2;
-    }
-
-    // Field text (or mask)
-    let display = field.display();
-    if display.is_empty() {
-        if let Some(ph) = placeholder {
-            if !ph.is_empty() {
-                c.draw_text(
-                    symbian_ui::Point::new(text_x, field_r.y0 + 3 + body.ascent()),
-                    ph,
-                    body,
-                    p.dim,
-                );
-            }
-        }
-    } else {
-        // The selection goes down first, so the characters land on top of it rather than being
-        // covered by it. A selection nobody can see is worse than none: the next key replaces text
-        // the user did not know was chosen.
-        if let Some((from, to)) = field.selection() {
-            paint::text_selection(
-                c,
-                text_x,
-                field_r.y0 + 3,
-                field_r.y0 + 3 + body.line_height(),
-                &display,
-                field.display_offset(from),
-                field.display_offset(to),
-                body,
-                p.selection.mid(),
-            );
-        }
-        c.draw_text_in(
-            Rect::new(
-                text_x,
-                field_r.y0 + 3,
-                field_r.x1 - 4,
-                field_r.y0 + 3 + body.line_height(),
-            ),
-            &display,
-            body,
-            p.text,
-            Align::Start,
-        );
-    }
-
-    // Caret. `display_offset` is the conversion for a masked field, where the display is one `*`
-    // per character and a byte offset into the password is not one into the stars.
-    let before = &display[..field.display_offset(field.cursor()).min(display.len())];
-    let cx = text_x + body.measure(before);
-    c.fill_rect(Rect::new(cx, field_r.y0 + 3, cx + 1, field_r.y1 - 3), p.accent);
+    // The box, the prefix, the text or its mask, the selection and the caret — one implementation,
+    // in the toolkit, shared with `symbian-decl-ui`'s `TextField` widget. It used to be written out
+    // here, and the widget drew a different field: a stroked rectangle, no prefix, no selection, a
+    // caret in another place. Two drawings of one control cannot be compared, which is the whole
+    // reason the declarative login screen needed this to move.
+    chrome::text_field(
+        c,
+        field_r,
+        theme,
+        field,
+        chrome::FieldStyle { prefix, placeholder, focused: true },
+    );
 
     // Error
     if let Some(e) = error {
@@ -657,28 +737,46 @@ fn draw_field_centered(
     field_r
 }
 
+/// The eye's size. Not negotiable: the lens shape is built from this ratio, so a different box
+/// would not be the same drawing scaled — it would be a different drawing.
+pub(crate) const EYE_W: i32 = 14;
+pub(crate) const EYE_H: i32 = 9;
+
 /// An eye to the right of the password field, saying whether the text is visible.
 ///
 /// Drawn rather than written, because the state has to be readable at a glance while
 /// someone is typing and the softkey label is at the other end of the screen. Two arcs and
 /// a pupil at this size is four rows of pixels; a slash across it when hidden.
+///
+/// This half is the *placement*: six pixels past the field, vertically centred on it, and nothing at
+/// all if it would not fit. The pixels are [`draw_eye_at`], which the declarative screen calls with a
+/// rect the layout gave it.
 fn draw_eye(c: &mut Canvas<'_>, area: Rect, field: Rect, theme: &Theme<'_>, open: bool) {
-    let p = &theme.palette;
-    let h = 9;
-    let w = 14;
     let x0 = field.x1 + 6;
-    let y0 = field.y0 + (field.height() - h) / 2;
+    let y0 = field.y0 + (field.height() - EYE_H) / 2;
     // The field is centred with a margin either side; if the eye will not fit in it the
     // softkey label is the whole control, which is why that one says the verb.
-    if x0 + w > area.x1 {
+    if x0 + EYE_W > area.x1 {
         return;
     }
+    draw_eye_at(c, Rect::from_xywh(x0, y0, EYE_W, EYE_H), theme, open);
+}
+
+/// The eye itself, in the rect it was given.
+///
+/// Split from [`draw_eye`] so that [`crate::login_decl`] can put it in a tree: the declarative screen
+/// has a layout to ask where things go, and only the shape is worth sharing. One drawing, two
+/// placements — which is the same bargain `chrome::text_field` strikes.
+pub(crate) fn draw_eye_at(c: &mut Canvas<'_>, r: Rect, theme: &Theme<'_>, open: bool) {
+    let p = &theme.palette;
+    let (h, w) = (EYE_H, EYE_W);
+    let (x0, y0) = (r.x0, r.y0);
     let colour = if open { p.accent } else { p.dim };
 
     // The outline: a lens shape, widest in the middle.
     for row in 0..h {
         // Distance from the middle row, as a fraction of the half height.
-        let d = (row as i32 - h / 2).abs();
+        let d = (row - h / 2).abs();
         let inset = d * w / (h + 1);
         let (a, b) = (x0 + inset, x0 + w - inset);
         if b <= a {
@@ -736,7 +834,7 @@ fn error_text(e: &AuthError) -> String {
 }
 
 /// Small unsigned integer to text without `core::fmt`.
-fn itoa(mut v: u32) -> String {
+pub(crate) fn itoa(mut v: u32) -> String {
     let mut buf = [0u8; 10];
     let mut i = buf.len();
     loop {
@@ -760,12 +858,12 @@ mod tests {
         // because `handle_field` would otherwise swallow it.
         let mut login = Login::new(0, "");
         login.screen = Screen::Password {
-            field: {
+            field: shared({
                 let mut f = TextField::with_limit(128);
                 f.set_masked(true);
                 f.insert_str("hunter2");
                 f
-            },
+            }),
             hint: String::new(),
             error: None,
         };
@@ -773,7 +871,7 @@ mod tests {
         let r = Rect::from_xywh(0, 0, 240, 320);
 
         let masked_before = match &login.screen {
-            Screen::Password { field, .. } => field.display().to_string(),
+            Screen::Password { field, .. } => field.borrow().display().to_string(),
             _ => panic!(),
         };
         assert_eq!(masked_before, "*******", "the field was not masked to begin with");
@@ -781,8 +879,8 @@ mod tests {
         login.handle_key(KeyEvent::new(Key::Softkey(Softkey::Left)), &t, r);
         match &login.screen {
             Screen::Password { field, .. } => {
-                assert_eq!(field.display(), "hunter2", "the eye did not open");
-                assert!(!field.is_masked());
+                assert_eq!(field.borrow().display(), "hunter2", "the eye did not open");
+                assert!(!field.borrow().is_masked());
             }
             _ => panic!("the screen changed"),
         }
@@ -790,7 +888,7 @@ mod tests {
         // And back.
         login.handle_key(KeyEvent::new(Key::Softkey(Softkey::Left)), &t, r);
         match &login.screen {
-            Screen::Password { field, .. } => assert_eq!(field.display(), "*******"),
+            Screen::Password { field, .. } => assert_eq!(field.borrow().display(), "*******"),
             _ => panic!(),
         }
     }
@@ -859,7 +957,7 @@ mod tests {
             let mut login = Login::new(12345, "abcdef");
             login.code_sent = true;
             login.screen = Screen::Code {
-                field: digits_field(8),
+                field: shared(digits_field(8)),
                 length: Some(5),
                 error: None,
             };
@@ -872,11 +970,11 @@ mod tests {
             let mut login = Login::new(12345, "abcdef");
             login.password_needed = true;
             login.screen = Screen::Password {
-                field: {
+                field: shared({
                     let mut f = TextField::with_limit(128);
                     f.set_masked(true);
                     f
-                },
+                }),
                 hint: "dica do usuário".into(),
                 error: None,
             };
@@ -888,7 +986,7 @@ mod tests {
         {
             let mut login = Login::new(12345, "abcdef");
             login.screen = Screen::Phone {
-                field: digits_field(16),
+                field: shared(digits_field(16)),
                 error: Some("Número não reconhecido".into()),
             };
             let mut c = symbian_ui::Canvas::from_slice(&mut buf, sz);
@@ -922,8 +1020,8 @@ mod tests {
 
         match &login.screen {
             Screen::Phone { field, .. } => {
-                assert_eq!(field.text(), "12");
-                assert!(!field.text().contains('a'));
+                assert_eq!(field.borrow().text(), "12");
+                assert!(!field.borrow().text().contains('a'));
             }
             _ => panic!(),
         }
@@ -1011,11 +1109,11 @@ mod tests {
         let mut login = Login::new(12345, "abcdef");
         login.password_needed = true;
         login.screen = Screen::Password {
-            field: {
+            field: shared({
                 let mut f = TextField::with_limit(128);
                 f.set_masked(true);
                 f
-            },
+            }),
             hint: String::new(),
             error: None,
         };
@@ -1023,9 +1121,9 @@ mod tests {
         // Type and check masking.
         match &mut login.screen {
             Screen::Password { field, .. } => {
-                field.insert_str("hunter2");
-                assert_eq!(field.text(), "hunter2");
-                assert_eq!(field.display(), "*******");
+                field.borrow_mut().insert_str("hunter2");
+                assert_eq!(field.borrow().text(), "hunter2");
+                assert_eq!(field.borrow().display(), "*******");
             }
             _ => panic!(),
         }

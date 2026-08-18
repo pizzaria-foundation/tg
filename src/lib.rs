@@ -13,6 +13,8 @@ extern crate alloc;
 pub mod driver;
 pub mod link;
 pub mod login;
+/// The login screens described declaratively, beside the hand-written ones. See the module header.
+pub mod login_decl;
 pub mod session_store;
 pub mod selfcheck;
 pub mod chats;
@@ -297,61 +299,14 @@ impl App {
         }
 
         match &mut self.screen {
-            Screen::Login => {
-                let login = &mut self.login;
-                let (handled, action) = login.handle_key(ev, theme, screen_rect);
-                match action {
-                    LoginAction::SendCode(number) => {
-                        symbian::log!("[act] send code to {}", symbian::log::redact_phone(&number));
-                        symbian::log!("ACTION send_code len={}", number.chars().count());
-                        let p = login.ask_send_code(&number);
-                        if let driver::Outcome::Disconnected(why) =
-                            drive(&mut self.driver, p, login)
-                        {
-                            login.set_error(why);
-                        }
-                        Handled::Consumed
-                    }
-                    LoginAction::SubmitCode(code) => {
-                        // The length, not the code. A five-digit code in a log is a live
-                        // credential for the next few minutes.
-                        symbian::log!("[act] submit code digits={}", code.chars().count());
-                        let p = login.submit_code(&code);
-                        if let driver::Outcome::Disconnected(why) =
-                            drive(&mut self.driver, p, login)
-                        {
-                            login.set_error(why);
-                        }
-                        Handled::Consumed
-                    }
-                    LoginAction::SubmitPassword(pw) => {
-                        symbian::log!("[act] submit password");
-                        let p = login.submit_password(&pw);
-                        if let driver::Outcome::Disconnected(why) =
-                            drive(&mut self.driver, p, login)
-                        {
-                            login.set_error(why);
-                        }
-                        Handled::Consumed
-                    }
-                    LoginAction::Resend => {
-                        symbian::log!("[act] resend");
-                        let p = login.ask_resend();
-                        if let driver::Outcome::Disconnected(why) =
-                            drive(&mut self.driver, p, login)
-                        {
-                            login.set_error(why);
-                        }
-                        Handled::Consumed
-                    }
-                    LoginAction::Back => {
-                        // Back on the phone screen means exit.
-                        self.should_exit = true;
-                        Handled::Consumed
-                    }
-                    LoginAction::None => handled,
-                }
-            }
+            // The login screens do not arrive here any more either.
+            //
+            // They are `login_decl`, routed by `mvu::Tg`: the softkeys and the green key through
+            // `login_decl::on_key`, the typing through the field in the tree. What used to be in this
+            // arm — a `LoginAction` turned into a call on the machine and then on the driver — is
+            // `App::login_submit` and its two neighbours below, which is where the driver already
+            // lives.
+            Screen::Login => Handled::Ignored,
             // The dialog list does not arrive here any more.
             //
             // Its keys are routed by `mvu::Tg` — `chats_decl::on_key` for the softkeys and the
@@ -603,6 +558,64 @@ impl App {
         } else {
             self.load_older(i);
         }
+    }
+
+    /// The middle softkey on a login screen: send the code, submit the code, submit the password.
+    ///
+    /// Which of the three belongs to [`Login`], which knows what is on screen; what belongs here is
+    /// the driver — and the `Disconnected` outcome, which used to be discarded and left the screen
+    /// sitting on "sending the code" with nothing in flight and nothing to say so.
+    pub(crate) fn login_submit(&mut self) {
+        let Some(p) = self.login.submit_current() else { return };
+        if let driver::Outcome::Disconnected(why) = drive(&mut self.driver, p, &mut self.login) {
+            self.login.set_error(why);
+        }
+    }
+
+    /// The code screen's "Voltar", and the waiting screen's "Cancelar".
+    ///
+    /// "Cancelar" does not cancel the request in flight — this client has no path from a screen down
+    /// to the socket — it moves back to the phone number so the user is not left watching a spinner.
+    /// A reply that arrives afterwards still goes through the machine and posts the code or the
+    /// error, so nothing is lost; a real cancel is one `Cmd` away and not done.
+    pub(crate) fn login_back_to_phone(&mut self) {
+        self.login.back_to_phone();
+    }
+
+    /// The password screen's left softkey: the only way to reveal a password on a phone with no
+    /// touch screen.
+    pub(crate) fn login_toggle_mask(&mut self) {
+        self.login.toggle_mask();
+    }
+
+    /// Move the login machine to the phone screen, for a test.
+    ///
+    /// `Login::new` starts on the waiting screen — the network is not ready at launch and a number
+    /// field that cannot be used reads as a broken screen — so a test that wants to type a number has
+    /// to say so. Named `_for_test` because that is the only caller: on the device the transition
+    /// happens when the link reports itself ready.
+    #[cfg(test)]
+    pub(crate) fn show_phone_for_test(&mut self) {
+        self.login.show_phone();
+    }
+
+    /// Put the login machine on the password screen, for a test.
+    #[cfg(test)]
+    pub(crate) fn show_password_for_test(&mut self, hint: &str) {
+        self.login.show_password_for_test(hint);
+    }
+
+    /// Whether a login screen is what is in front.
+    pub(crate) fn on_login(&self) -> bool {
+        matches!(self.screen, Screen::Login)
+    }
+
+    /// The login machine, to read — for `mvu`, which builds a description of it.
+    ///
+    /// Named for what it returns rather than `login()`, which is already the constructor that opens a
+    /// connection. Two things called `login` on one type is how a caller reaches for the wrong one.
+    pub(crate) fn login_state(&self) -> &Login {
+        &self.login
     }
 
     /// Hold only the inline previews near where the user is looking in `chat`.
@@ -1223,7 +1236,9 @@ impl App {
 
     fn paint(&mut self, c: &mut Canvas<'_>, theme: &Theme<'_>) {
         match &mut self.screen {
-            Screen::Login => self.login.draw(c, theme),
+            // Nothing: the login screens are a declarative tree the bridge draws, and this function
+            // is only reached through the adapter around the screens still written by hand.
+            Screen::Login => {}
             // Nothing: the dialog list is a declarative tree that the bridge draws directly, and
             // this function is only called through the adapter around the hand-written screens. See
             // the `Screen::Chats` variant.
@@ -1747,7 +1762,7 @@ mod tests {
             let mut login = Login::new(12345, "abcdef");
             login.code_sent = true;
             login.screen = Screen::Code {
-                field: TextField::with_limit(8),
+                field: login::shared(TextField::with_limit(8)),
                 length: Some(5),
                 error: None,
             };
@@ -1762,11 +1777,11 @@ mod tests {
             let mut login = Login::new(12345, "abcdef");
             login.password_needed = true;
             login.screen = Screen::Password {
-                field: {
+                field: login::shared({
                     let mut f = TextField::with_limit(128);
                     f.set_masked(true);
                     f
-                },
+                }),
                 hint: String::new(),
                 error: None,
             };

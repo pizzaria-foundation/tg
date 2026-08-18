@@ -53,7 +53,10 @@ const OUT: &str = "parity-out";
 
 fn main() -> ExitCode {
     let atlases = Atlases::load();
-    let mut p = Parity::new(OUT);
+    // `keep_matching`, so a passing run still leaves the pictures behind: a comparison whose output
+    // only exists when it fails is one nobody looks at when it passes, and looking is how a *shared*
+    // omission gets caught — two sides that both fail to draw something agree perfectly.
+    let mut p = Parity::new(OUT).keep_matching(true);
     atlases.with_themes(|dark, light| {
         run(&mut p, dark, light);
     });

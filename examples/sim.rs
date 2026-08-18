@@ -10,7 +10,11 @@
 //! adapter. The host cannot tell — that is what the bridge is for.
 
 fn main() {
-    if let Err(e) = symbian_sim::run(tg::mvu::mock()) {
+    // A clipboard the host actually has: the shim's is not reachable from a desktop process, so
+    // without this copy and paste in the simulator are quiet no-ops and the one path that only paste
+    // exercises — a phone number arriving without keystrokes — goes untried until a handset.
+    let app = tg::mvu::mock().with_clipboard(symbian_ui::MemClipboard::new());
+    if let Err(e) = symbian_sim::run(app) {
         eprintln!("{e}");
         std::process::exit(1);
     }

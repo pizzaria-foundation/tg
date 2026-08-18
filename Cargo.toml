@@ -112,3 +112,8 @@ symbian-decl-ui = { path = "../SDK/crates/symbian-decl-ui" }
 [[example]]
 name = "chats_parity"
 test = true
+
+# The login screens' comparison, on the same footing and for the same reason.
+[[example]]
+name = "login_parity"
+test = true

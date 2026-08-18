@@ -29,3 +29,9 @@ data/*_icon_mask.bmp
 # writer uses stored deflate blocks. The curated set under docs/screenshots/ is the same
 # pixels re-encoded with a palette - 6 screens in 69 KB - and that one is committed.
 preview-out/
+
+# The same, from the parity harnesses: two sheets per scene, twenty-six scenes, rewritten by
+# every `cargo test`. The comparison's *result* is the assertion in the example, which fails the
+# build; the pictures are for looking at when it does, and a tree that goes dirty on every test
+# run trains everyone to ignore `git status`.
+parity-out/
