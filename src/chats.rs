@@ -51,14 +51,13 @@ impl ChatList {
             let gutter = chrome::scrollbar_gutter(theme, bar.is_some());
             let body = Rect { x1: frame.content.x1 - gutter, ..frame.content };
 
-            // Clip so a row straddling the top or bottom edge is cut cleanly
-            // rather than bleeding into the chrome.
-            let saved = c.save();
-            c.clip_to(frame.content);
-            self.state.for_visible(&rows, body, |i, r| {
+            // `draw_visible` clips to the band, so a row straddling the top or bottom edge is
+            // cut cleanly rather than bleeding into the chrome. This was a hand-rolled
+            // `save`/`clip_to`/`restore` here — one of two in this crate — until the clip moved
+            // into `ListState` where the SDK's other eight row loops pick it up too.
+            self.state.draw_visible(c, &rows, body, |c, i, r| {
                 self.draw_row(c, r, theme, &store.chats[i], i == self.state.selected);
             });
-            c.restore(saved);
 
             chrome::scrollbar(c, frame.content, theme, bar);
         }

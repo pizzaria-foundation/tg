@@ -30,6 +30,13 @@ struct Laid {
     gap: i32,
     /// Extra height for a media placeholder, above the text. Includes [`MEDIA_GAP`].
     media_h: i32,
+    /// Byte ranges into `Message::text` that are links, in order.
+    ///
+    /// Computed here, with the wrapping, rather than in the draw: `Transcript` is rebuilt only when
+    /// the width or the message count changes, and scanning every message's text on every frame
+    /// would be the same work a hundred times a second to answer a question whose answer cannot
+    /// have changed. It is the same bargain the line wrapping already makes.
+    links: Vec<core::ops::Range<usize>>,
 }
 
 impl Laid {
@@ -132,6 +139,7 @@ impl Transcript {
                 + media_h;
 
             laid.push(Laid {
+                links: symbian::url::find_links(&m.text),
                 lines,
                 bubble_w: (content_w + BUBBLE_HPAD * 2).min(max_bubble),
                 height,
@@ -175,8 +183,16 @@ pub struct Conversation {
     transcript: Option<Transcript>,
     /// Set briefly when the user taps a media message, so the screen can show feedback.
     pub note: Option<alloc::string::String>,
+    /// Which link inside the selected message has the cursor, if any.
+    ///
+    /// Here and not in the model, for the same reason a scroll offset is not in the model: it is a
+    /// cursor position, meaningless without the laid-out text beside it, and an `update` that set it
+    /// would be guessing at something only the layout knows. The message the cursor is *on* is
+    /// `state.selected`, which is model state and stays there.
+    link: Option<usize>,
 }
 
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ConvAction {
     Back,
     Send(alloc::string::String),
@@ -184,8 +200,15 @@ pub enum ConvAction {
     LoadMore,
     /// The user pressed Select on a message with media.
     OpenMedia(usize),
+    /// The user pressed Select on a focused link. Carries the URL as written in the message —
+    /// the caller decides what opens it, which on this device means asking the launcher.
+    OpenLink(alloc::string::String),
     /// Re-fetch the newest page of this conversation.
     Refresh,
+    /// The user asked to copy what is highlighted. Carries the text already resolved to whatever
+    /// the cursor was on, which is the same division of labour [`ConvAction::OpenLink`] draws:
+    /// this screen knows *what* was meant, the application owns the clipboard.
+    Copy(alloc::string::String),
     None,
 }
 
@@ -199,6 +222,7 @@ impl Conversation {
             focus: Focus::Composer,
             transcript: None,
             note: None,
+            link: None,
         }
     }
 
@@ -249,7 +273,121 @@ impl Conversation {
         (transcript_area, composer)
     }
 
+    /// The links in the selected message, if the layout has been built.
+    fn links_here(&self) -> &[core::ops::Range<usize>] {
+        self.transcript
+            .as_ref()
+            .and_then(|t| t.laid.get(self.state.selected))
+            .map(|l| l.links.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// The focused link's text, if there is one.
+    pub fn focused_link<'a>(&self, chat: &'a Chat) -> Option<&'a str> {
+        let i = self.link?;
+        let r = self.links_here().get(i)?.clone();
+        chat.messages.get(self.state.selected)?.text.get(r)
+    }
+
+    /// Move the link cursor by `delta`, returning whether that consumed the key.
+    ///
+    /// The model is one linear sequence of stops, walked forwards by Down and backwards by Up:
+    ///
+    /// ```text
+    ///   [message A] [A link 0] [A link 1] … [message B] [B link 0] …
+    /// ```
+    ///
+    /// So a message is a stop in its own right — which is what keeps Select opening the *media* on
+    /// a message that has both — and its links are the stops after it. `false` means the cursor ran
+    /// off the end of this message's links and the caller should move the selection instead.
+    ///
+    /// The one asymmetry is deliberate and is what makes the sequence reversible: arriving at a
+    /// message from *below* lands on its last link, not on the message. Anything else would make
+    /// Up unable to reach a link it had just walked down through.
+    fn step_link(&mut self, delta: isize) -> bool {
+        let n = self.links_here().len();
+        if n == 0 {
+            return false;
+        }
+        match (self.link, delta) {
+            (None, 1) => {
+                self.link = Some(0);
+                true
+            }
+            (Some(i), 1) if i + 1 < n => {
+                self.link = Some(i + 1);
+                true
+            }
+            (Some(i), -1) if i > 0 => {
+                self.link = Some(i - 1);
+                true
+            }
+            // Up off the first link lands on the message, which is the stop before its links — so
+            // the key is consumed and the selection does not move.
+            (Some(0), -1) => {
+                self.link = None;
+                true
+            }
+            // Down off the last link leaves the message entirely: the next stop is the next
+            // message, so the cursor is dropped and the selection moves.
+            (Some(_), _) => {
+                self.link = None;
+                false
+            }
+            (None, _) => false,
+        }
+    }
+
+    /// Land the link cursor after the selection moved, so the sequence reads the same backwards.
+    fn enter_from(&mut self, delta: isize) {
+        self.link = if delta < 0 {
+            // Came up into this message: its last link is the stop just before the message itself.
+            match self.links_here().len() {
+                0 => None,
+                n => Some(n - 1),
+            }
+        } else {
+            None
+        };
+    }
+
+    /// Route a key, giving the link cursor first refusal on Up and Down.
+    ///
+    /// A wrapper rather than a branch inside the routing below, and that is the whole point: the
+    /// existing Up/Down arms carry real behaviour — asking for older messages at the top, handing
+    /// focus to the composer at the bottom — and re-implementing any of it here to make room for a
+    /// link cursor would be a second copy that drifts. So the cursor walks first, and if it has run
+    /// out of links the untouched routing runs exactly as before.
     pub fn handle_key(
+        &mut self,
+        ev: KeyEvent,
+        chat: &Chat,
+        theme: &Theme<'_>,
+        screen: Rect,
+    ) -> (Handled, ConvAction) {
+        let delta = match ev.key {
+            Key::Up if self.focus == Focus::Transcript => Some(-1isize),
+            Key::Down if self.focus == Focus::Transcript => Some(1isize),
+            _ => None,
+        };
+        let Some(d) = delta else {
+            return self.route_key(ev, chat, theme, screen);
+        };
+        // The layout has to exist before `links_here` can answer, and it is what the routing builds
+        // first anyway.
+        self.ensure_layout(chat, theme, screen);
+        if self.step_link(d) {
+            return (Handled::Consumed, ConvAction::None);
+        }
+        let before = self.state.selected;
+        let out = self.route_key(ev, chat, theme, screen);
+        if self.state.selected != before {
+            self.enter_from(d);
+        }
+        out
+    }
+
+    fn route_key(
         &mut self,
         ev: KeyEvent,
         chat: &Chat,
@@ -270,6 +408,14 @@ impl Conversation {
             Key::Softkey(Softkey::Middle) | Key::Enter | Key::Call | Key::Select => {
                 // In Transcript focus, open media or ignore — never send text.
                 if self.focus == Focus::Transcript {
+                    // A focused link wins over the message's media. It has to: the cursor is
+                    // visibly on the link, and opening something else would be the screen doing one
+                    // thing while showing another.
+                    if let Some(url) = self.focused_link(chat) {
+                        let url = alloc::string::String::from(url);
+                        self.note = Some(alloc::format!("abrindo {url}"));
+                        return (Handled::Consumed, ConvAction::OpenLink(url));
+                    }
                     if let Some(msg) = chat.messages.get(self.state.selected) {
                         if let Some(media) = &msg.media {
                             let label = media_label(media, theme.fonts.body);
@@ -315,6 +461,31 @@ impl Conversation {
                     return (Handled::Consumed, ConvAction::None);
                 }
             }
+            // Ctrl+C on the transcript copies what the cursor is on. The focused link wins over the
+            // message for the same reason it wins on Select: the cursor is visibly on the link, and
+            // copying the whole message instead would be the screen doing one thing while showing
+            // another. In the composer this key never arrives here — the field answers it first,
+            // where it copies the selection.
+            Key::Ctrl('c') if self.focus == Focus::Transcript => {
+                if let Some(url) = self.focused_link(chat) {
+                    let url = alloc::string::String::from(url);
+                    self.note = Some(alloc::format!("copiado: {url}"));
+                    return (Handled::Consumed, ConvAction::Copy(url));
+                }
+                let text = chat
+                    .messages
+                    .get(self.state.selected)
+                    .map(|m| m.text.clone())
+                    .unwrap_or_default();
+                if text.is_empty() {
+                    // A photo with no caption. Saying nothing happened beats a "copiado" over an
+                    // empty clipboard.
+                    self.note = Some(alloc::string::String::from("nada para copiar"));
+                    return (Handled::Consumed, ConvAction::None);
+                }
+                self.note = Some(alloc::string::String::from("mensagem copiada"));
+                return (Handled::Consumed, ConvAction::Copy(text));
+            }
             // Left/Right in Transcript: move one message, not a page jump.
             Key::Left if self.focus == Focus::Transcript => {
                 let t = self.transcript.as_ref().unwrap();
@@ -330,7 +501,10 @@ impl Conversation {
         }
 
         let handled = match self.focus {
-            Focus::Composer => self.composer.handle_key(ev),
+            // The clipboard the field pastes from and copies to. Handing it over here is all an
+            // app has to do for Ctrl+C/X/V and Shift+arrow selection to work in every one of its
+            // fields — the editing itself is the toolkit's.
+            Focus::Composer => self.composer.handle_key(ev, &mut symbian_app::SystemClipboard),
             Focus::Transcript => {
                 let t = self.transcript.as_ref().unwrap();
                 self.state.handle_key(ev, t, vp)
@@ -363,13 +537,14 @@ impl Conversation {
             ..area
         };
 
-        let saved = c.save();
-        c.clip_to(area);
-        self.state.for_visible(t, body, |i, r| {
+        // The clip is `draw_visible`'s, not ours — see the note in `chats.rs`.
+        self.state.draw_visible(c, t, body, |c, i, r| {
             let focused = self.focus == Focus::Transcript && i == self.state.selected;
-            draw_bubble(c, r, theme, &chat.messages[i], &t.laid[i], focused);
+            // The link cursor belongs to the selected message and to no other, so a link
+            // highlighted on a row the cursor has left is not possible by construction.
+            let link_focus = if focused { self.link } else { None };
+            draw_bubble(c, r, theme, &chat.messages[i], &t.laid[i], focused, link_focus);
         });
-        c.restore(saved);
         chrome::scrollbar(c, area, theme, bar);
 
         // Composer
@@ -381,6 +556,20 @@ impl Conversation {
         if self.composer.is_empty() {
             c.draw_text_in(field, "Mensagem…", theme.fonts.body, p.dim, Align::Start);
         } else {
+            // Under the text, so the characters stay on top of their own highlight.
+            if let Some((from, to)) = self.composer.selection() {
+                symbian_ui::paint::text_selection(
+                    c,
+                    field.x0,
+                    field.y0,
+                    field.y1,
+                    self.composer.text(),
+                    from,
+                    to,
+                    theme.fonts.body,
+                    p.selection.mid(),
+                );
+            }
             c.draw_text_in(field, self.composer.text(), theme.fonts.body, p.text, Align::Start);
         }
         if focused {
@@ -393,6 +582,72 @@ impl Conversation {
 
         let send = if self.composer.is_empty() { None } else { Some("Enviar") };
         chrome::softkey_bar(c, frame.softkeys, theme, [Some("Atualizar"), send, Some("Voltar")]);
+    }
+}
+
+/// Draw one wrapped line, breaking it where links start and end.
+///
+/// The alternative — draw the line, then paint link decoration over it — cannot work: the toolkit
+/// draws a run of text from a point and the only way to know where a substring lands is to have
+/// measured everything before it. So the line is walked in runs, each drawn at the pen where the
+/// previous one left it, which is the same walk a browser does and the reason a link that wraps
+/// underlines on both lines without anything having to know it wrapped.
+///
+/// The focused link is inverted rather than merely coloured. On a 320x240 screen at this font size
+/// a colour change is not a cursor — it reads as emphasis, and the user cannot tell what Select
+/// would open. A filled block can only mean "here".
+#[allow(clippy::too_many_arguments)]
+fn draw_text_line(
+    c: &mut Canvas<'_>,
+    theme: &Theme<'_>,
+    x0: i32,
+    y: i32,
+    text: &str,
+    line: &Line,
+    links: &[core::ops::Range<usize>],
+    link_focus: Option<usize>,
+    fg: symbian_ui::Color,
+) {
+    let body = theme.fonts.body;
+    let p = &theme.palette;
+    let baseline = y + body.ascent();
+    let mut pen = x0;
+    let mut at = line.start;
+
+    // Walk the line's byte range, emitting the gap before each overlapping link and then the link
+    // itself. `links` is ordered and non-overlapping — `symbian::url::find_links` guarantees both —
+    // so one pass is enough and no run can be visited twice.
+    for (i, link) in links.iter().enumerate() {
+        if link.end <= at || link.start >= line.end {
+            continue;
+        }
+        let lo = link.start.max(at);
+        let hi = link.end.min(line.end);
+        if lo > at {
+            let run = &text[at..lo];
+            c.draw_text(Point::new(pen, baseline), run, body, fg);
+            pen += body.measure(run);
+        }
+        let run = &text[lo..hi];
+        let w = body.measure(run);
+        if link_focus == Some(i) {
+            // Inverted: the accent as ground, the bubble's own text colour as figure. Drawn a pixel
+            // proud of the glyphs on every side so the block reads as a selection and not as a
+            // highlighter that clipped the descenders.
+            c.fill_rect(Rect::new(pen - 1, y, pen + w + 1, y + body.line_height()), p.accent);
+            c.draw_text(Point::new(pen, baseline), run, body, p.accent_text);
+        } else {
+            c.draw_text(Point::new(pen, baseline), run, body, p.accent);
+            // The underline is what says "link" when the accent is close to the text colour, which
+            // it is on some palettes. One pixel below the baseline, not below the line box: under
+            // the line box it would sit against the next row of text.
+            c.hline(baseline + 1, pen, pen + w, p.accent);
+        }
+        pen += w;
+        at = hi;
+    }
+    if at < line.end {
+        c.draw_text(Point::new(pen, baseline), &text[at..line.end], body, fg);
     }
 }
 
@@ -497,6 +752,8 @@ fn draw_bubble(
     m: &crate::model::Message,
     laid: &Laid,
     focused: bool,
+    // Which of this message's links has the cursor, if this is the selected message.
+    link_focus: Option<usize>,
 ) {
     let p = &theme.palette;
     let body = theme.fonts.body;
@@ -544,8 +801,7 @@ fn draw_bubble(
         y = ph.y1 + MEDIA_GAP;
     }
     for l in &laid.lines {
-        let text = &m.text[l.start..l.end];
-        c.draw_text(Point::new(inner.x0, y + body.ascent()), text, body, fg);
+        draw_text_line(c, theme, inner.x0, y, &m.text, l, &laid.links, link_focus, fg);
         y += body.line_height();
     }
 
@@ -577,18 +833,18 @@ fn draw_bubble(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::model::Store;
     // `Font` for its `glyph`: the sticker-label test asserts the atlas genuinely lacks the
     // emoji it is falling back from, so the fixture cannot drift away from the device.
     use symbian_ui::{BitmapFont, Font as _, Fonts, Size};
 
-    fn theme_with<'a>(f: &'a BitmapFont<'a>) -> Theme<'a> {
+    pub(crate) fn theme_with<'a>(f: &'a BitmapFont<'a>) -> Theme<'a> {
         Theme::dark(Fonts { body: f, strong: f, small: f, title: f })
     }
 
-    fn atlas() -> alloc::vec::Vec<u8> {
+    pub(crate) fn atlas() -> alloc::vec::Vec<u8> {
         // Every glyph 6x8, advance 6, so widths are trivially predictable.
         let chars: alloc::vec::Vec<char> = (0x20u32..0x500)
             .filter_map(char::from_u32)
@@ -895,5 +1151,242 @@ mod tests {
         assert_eq!(tr.len(), 1);
         assert!(conv.state.scroll >= 0);
         assert!(conv.state.selected < tr.len());
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+    use super::tests::{atlas, theme_with};
+    use crate::model::{Chat, Delivery, Message};
+    use symbian_ui::BitmapFont;
+
+    fn msg(text: &str, outgoing: bool) -> Message {
+        Message {
+            id: 1,
+            text: alloc::string::String::from(text),
+            outgoing,
+            time: alloc::string::String::from("12:00"),
+            state: Delivery::Read,
+            media: None,
+        }
+    }
+
+    fn chat_of(texts: &[&str]) -> Chat {
+        let mut c = Chat::default();
+        c.name = alloc::string::String::from("t");
+        c.messages = texts.iter().map(|t| msg(t, false)).collect();
+        c
+    }
+
+    const SCREEN: Rect = Rect { x0: 0, y0: 0, x1: 320, y1: 240 };
+
+    /// A conversation with its layout built and the cursor parked on message `at`.
+    ///
+    /// The parking is the point. A fresh conversation opens at the *newest* message — which is what
+    /// a chat client must do and what `ensure_layout` does on its first build — so a test that
+    /// assumed index 0 would be testing the wrong row without ever saying so. The first version of
+    /// these tests did exactly that and failed with a cursor one message from where it looked.
+    fn conv_on(chat: &Chat, t: &Theme<'_>, at: usize) -> Conversation {
+        let mut conv = Conversation::new(0);
+        conv.ensure_layout(chat, t, SCREEN);
+        let tr = conv.transcript.as_ref().unwrap();
+        conv.state.select(at, tr, SCREEN.height());
+        conv.link = None;
+        // And in the transcript: the screen opens with the *composer* focused, so a test that did
+        // not say otherwise would be sending its arrow keys to a text field.
+        conv.focus = Focus::Transcript;
+        conv
+    }
+
+    fn press(conv: &mut Conversation, chat: &Chat, t: &Theme<'_>, k: Key) -> ConvAction {
+        conv.handle_key(KeyEvent::new(k), chat, t, SCREEN).1
+    }
+
+    /// The cursor as a pair: which message, and which link inside it.
+    fn at(conv: &Conversation) -> (usize, Option<usize>) {
+        (conv.state.selected, conv.link)
+    }
+
+    #[test]
+    fn down_walks_message_then_its_links_then_the_next_message() {
+        // The sequence the whole feature is: a message is a stop in its own right, and its links
+        // are the stops after it.
+        let data = atlas();
+        let f = BitmapFont::new(&data).unwrap();
+        let t = theme_with(&f);
+        let chat = chat_of(&["veja https://um.com e https://dois.com", "sem link aqui"]);
+        let mut conv = conv_on(&chat, &t, 0);
+
+        assert_eq!(at(&conv), (0, None), "starts on the message, not on a link");
+        press(&mut conv, &chat, &t, Key::Down);
+        assert_eq!(at(&conv), (0, Some(0)));
+        press(&mut conv, &chat, &t, Key::Down);
+        assert_eq!(at(&conv), (0, Some(1)));
+        press(&mut conv, &chat, &t, Key::Down);
+        assert_eq!(at(&conv), (1, None), "off the last link moves to the next message");
+    }
+
+    #[test]
+    fn up_walks_the_same_sequence_backwards() {
+        // The property that makes the model a sequence rather than two behaviours: arriving at a
+        // message from below lands on its LAST link, so every stop Down visited, Up visits too.
+        let data = atlas();
+        let f = BitmapFont::new(&data).unwrap();
+        let t = theme_with(&f);
+        let chat = chat_of(&["veja https://um.com e https://dois.com", "sem link aqui"]);
+        let mut conv = conv_on(&chat, &t, 0);
+
+        let mut forward = alloc::vec![at(&conv)];
+        for _ in 0..3 {
+            press(&mut conv, &chat, &t, Key::Down);
+            forward.push(at(&conv));
+        }
+        let mut backward = alloc::vec![at(&conv)];
+        for _ in 0..3 {
+            press(&mut conv, &chat, &t, Key::Up);
+            backward.push(at(&conv));
+        }
+        backward.reverse();
+        assert_eq!(forward, backward, "the walk must be the same stops in reverse");
+    }
+
+    #[test]
+    fn a_message_without_links_navigates_exactly_as_before() {
+        // The regression that matters most: this feature must not make the common case worse. Two
+        // plain messages, and the cursor never acquires a link at any point.
+        let data = atlas();
+        let f = BitmapFont::new(&data).unwrap();
+        let t = theme_with(&f);
+        let chat = chat_of(&["primeira", "segunda", "terceira"]);
+        let mut conv = conv_on(&chat, &t, 0);
+
+        for _ in 0..2 {
+            press(&mut conv, &chat, &t, Key::Down);
+        }
+        assert_eq!(at(&conv), (2, None));
+        press(&mut conv, &chat, &t, Key::Up);
+        assert_eq!(at(&conv), (1, None), "and Up never lands on a link that is not there");
+    }
+
+    #[test]
+    fn select_on_a_link_opens_it_and_says_which() {
+        let data = atlas();
+        let f = BitmapFont::new(&data).unwrap();
+        let t = theme_with(&f);
+        let chat = chat_of(&["veja https://exemplo.com/a."]);
+        let mut conv = conv_on(&chat, &t, 0);
+
+        // On the message itself, Select is not a link press.
+        assert_eq!(press(&mut conv, &chat, &t, Key::Select), ConvAction::None);
+        press(&mut conv, &chat, &t, Key::Down);
+        match press(&mut conv, &chat, &t, Key::Select) {
+            ConvAction::OpenLink(u) => assert_eq!(u, "https://exemplo.com/a", "the full stop is not part of it"),
+            other => panic!("expected OpenLink, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_focused_link_wins_over_the_message_media() {
+        // A message can have both. The cursor is visibly on the link, so opening the attachment
+        // instead would be the screen doing one thing while showing another.
+        let data = atlas();
+        let f = BitmapFont::new(&data).unwrap();
+        let t = theme_with(&f);
+        let mut chat = chat_of(&["olha https://exemplo.com"]);
+        chat.messages[0].media = Some(crate::model::Media::File {
+            id: 1,
+            access_hash: 1,
+            file_reference: alloc::vec::Vec::new(),
+            dc_id: 1,
+            filename: alloc::string::String::from("a.pdf"),
+            size: 10,
+        });
+        let mut conv = conv_on(&chat, &t, 0);
+
+        // On the message: the media.
+        assert!(matches!(press(&mut conv, &chat, &t, Key::Select), ConvAction::OpenMedia(0)));
+        // On the link: the link.
+        press(&mut conv, &chat, &t, Key::Down);
+        assert!(matches!(press(&mut conv, &chat, &t, Key::Select), ConvAction::OpenLink(_)));
+    }
+
+    #[test]
+    fn ctrl_c_copies_the_highlighted_message() {
+        let data = atlas();
+        let f = BitmapFont::new(&data).unwrap();
+        let t = theme_with(&f);
+        let chat = chat_of(&["primeira", "segunda"]);
+        let mut conv = conv_on(&chat, &t, 1);
+        match press(&mut conv, &chat, &t, Key::Ctrl('c')) {
+            ConvAction::Copy(text) => assert_eq!(text, "segunda"),
+            other => panic!("expected the message text, got {other:?}"),
+        }
+        // And it says so, because a copy is invisible otherwise — nothing on the screen changes.
+        assert_eq!(conv.note.as_deref(), Some("mensagem copiada"));
+    }
+
+    #[test]
+    fn ctrl_c_on_a_focused_link_copies_only_the_link() {
+        // The same rule Select follows: the cursor is visibly on the link, so the link is what the
+        // user meant. Copying the whole message would be the screen doing one thing while showing
+        // another.
+        let data = atlas();
+        let f = BitmapFont::new(&data).unwrap();
+        let t = theme_with(&f);
+        let chat = chat_of(&["olha https://exemplo.com"]);
+        let mut conv = conv_on(&chat, &t, 0);
+        press(&mut conv, &chat, &t, Key::Down);
+        match press(&mut conv, &chat, &t, Key::Ctrl('c')) {
+            ConvAction::Copy(text) => assert_eq!(text, "https://exemplo.com"),
+            other => panic!("expected the link, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ctrl_c_on_a_message_with_no_text_copies_nothing_and_says_so() {
+        // A photo with no caption. Claiming "copiado" over an empty clipboard is worse than
+        // saying nothing happened: the user pastes an hour later and gets whatever was there.
+        let data = atlas();
+        let f = BitmapFont::new(&data).unwrap();
+        let t = theme_with(&f);
+        let chat = chat_of(&[""]);
+        let mut conv = conv_on(&chat, &t, 0);
+        assert!(matches!(press(&mut conv, &chat, &t, Key::Ctrl('c')), ConvAction::None));
+        assert_eq!(conv.note.as_deref(), Some("nada para copiar"));
+    }
+
+    #[test]
+    fn ctrl_c_in_the_composer_belongs_to_the_field_not_the_transcript() {
+        // The field answers first and copies its own selection. If this screen took the key
+        // instead, copying inside the composer would silently copy a message from the transcript.
+        let data = atlas();
+        let f = BitmapFont::new(&data).unwrap();
+        let t = theme_with(&f);
+        let chat = chat_of(&["uma mensagem"]);
+        let mut conv = conv_on(&chat, &t, 0);
+        conv.focus = Focus::Composer;
+        assert!(matches!(press(&mut conv, &chat, &t, Key::Ctrl('c')), ConvAction::None));
+        assert_eq!(conv.note, None, "no message was copied");
+    }
+
+    #[test]
+    fn walking_links_does_not_ask_for_older_messages() {
+        // Up at the top of the transcript means "fetch the page above". With a link cursor that
+        // branch has to wait its turn, or the first Up inside a link spends a network request.
+        let data = atlas();
+        let f = BitmapFont::new(&data).unwrap();
+        let t = theme_with(&f);
+        let chat = chat_of(&["https://um.com e https://dois.com"]);
+        let mut conv = conv_on(&chat, &t, 0);
+
+        press(&mut conv, &chat, &t, Key::Down);
+        press(&mut conv, &chat, &t, Key::Down);
+        assert_eq!(at(&conv), (0, Some(1)));
+        assert_eq!(press(&mut conv, &chat, &t, Key::Up), ConvAction::None, "still walking links");
+        assert_eq!(at(&conv), (0, Some(0)));
+        // Only once the cursor is off the links does the top-of-transcript branch fire.
+        assert_eq!(press(&mut conv, &chat, &t, Key::Up), ConvAction::None);
+        assert_eq!(press(&mut conv, &chat, &t, Key::Up), ConvAction::LoadMore);
     }
 }

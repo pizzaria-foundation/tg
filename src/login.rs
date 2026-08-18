@@ -183,7 +183,7 @@ impl Login {
     }
 
     fn make_phone_screen(&self, error: Option<String>) -> Screen {
-        let mut field = TextField::with_limit(16);
+        let mut field = digits_field(16);
         if !self.phone.is_empty() {
             field.insert_str(&self.phone);
         }
@@ -258,7 +258,7 @@ impl Login {
             Action::CodeSent { length } => {
                 self.code_sent = true;
                 self.screen = Screen::Code {
-                    field: TextField::with_limit(8),
+                    field: digits_field(8),
                     length: *length,
                     error: None,
                 };
@@ -292,10 +292,9 @@ impl Login {
         theme: &Theme<'_>,
         screen_rect: Rect,
     ) -> (Handled, LoginAction) {
-        let digit_only = matches!(self.screen, Screen::Phone { .. } | Screen::Code { .. });
         // Take the field out, modify it, put it back — avoids borrowing self twice.
         let mut screen = core::mem::replace(&mut self.screen, Screen::Waiting(""));
-        let (handled, action) = handle_screen_key(&mut screen, ev, theme, screen_rect, digit_only);
+        let (handled, action) = handle_screen_key(&mut screen, ev, theme, screen_rect);
         self.screen = screen;
         (handled, action)
     }
@@ -431,7 +430,6 @@ fn handle_screen_key(
     ev: KeyEvent,
     _theme: &Theme<'_>,
     _screen_rect: Rect,
-    digit_only: bool,
 ) -> (Handled, LoginAction) {
     let none = (Handled::Ignored, LoginAction::None);
 
@@ -454,7 +452,7 @@ fn handle_screen_key(
             match ev.key {
                 Key::Softkey(Softkey::Right) => {
                     *screen = Screen::Phone {
-                        field: TextField::with_limit(16),
+                        field: digits_field(16),
                         error: None,
                     };
                     (Handled::Consumed, LoginAction::None)
@@ -463,7 +461,7 @@ fn handle_screen_key(
             }
         }
         Screen::Phone { field, .. } => {
-            let handled = handle_field(field, ev, digit_only);
+            let handled = handle_field(field, ev);
             if handled.is_consumed() {
                 return (handled, LoginAction::None);
             }
@@ -479,7 +477,7 @@ fn handle_screen_key(
             }
         }
         Screen::Code { field, .. } => {
-            let handled = handle_field(field, ev, digit_only);
+            let handled = handle_field(field, ev);
             if handled.is_consumed() {
                 return (handled, LoginAction::None);
             }
@@ -490,7 +488,7 @@ fn handle_screen_key(
                 }
                 Key::Softkey(Softkey::Right) => {
                     *screen = Screen::Phone {
-                        field: TextField::with_limit(16),
+                        field: digits_field(16),
                         error: None,
                     };
                     (Handled::Consumed, LoginAction::None)
@@ -505,7 +503,7 @@ fn handle_screen_key(
                 field.set_masked(!masked);
                 return (Handled::Consumed, LoginAction::None);
             }
-            let handled = handle_field(field, ev, false);
+            let handled = handle_field(field, ev);
             if handled.is_consumed() {
                 return (handled, LoginAction::None);
             }
@@ -520,15 +518,24 @@ fn handle_screen_key(
     }
 }
 
-fn handle_field(field: &mut TextField, ev: KeyEvent, digit_only: bool) -> Handled {
-    if digit_only {
-        if let Key::Char(ch) = ev.key {
-            if !ch.is_ascii_digit() {
-                return Handled::Consumed;
-            }
-        }
-    }
-    field.handle_key(ev)
+/// Hand a key to a field, with the phone's clipboard behind it.
+///
+/// `digit_only` used to be enforced here, in front of the field, by inspecting `Key::Char`. That
+/// held for as long as typing was the only way text got in. It is not any more: pasted text does
+/// not arrive as keystrokes and walked straight past this check, so a phone-number field would
+/// have accepted a pasted street address. The rule moved into the field, where every route in has
+/// to pass it — see [`digits_field`] and `TextField::accepting`.
+fn handle_field(field: &mut TextField, ev: KeyEvent) -> Handled {
+    field.handle_key(ev, &mut symbian_app::SystemClipboard)
+}
+
+/// A field that holds digits, however they arrive — typed, pasted, or dropped in by a test.
+///
+/// The leading `+` of a phone number is drawn by the screen rather than stored, so it is not among
+/// the accepted characters: pasting `+55 21 99999-0000` leaves `5521999990000`, which is precisely
+/// what this field wanted from it.
+pub fn digits_field(max_chars: usize) -> TextField {
+    TextField::with_limit(max_chars).accepting(|c| c.is_ascii_digit())
 }
 
 fn draw_field_centered(
@@ -596,6 +603,22 @@ fn draw_field_centered(
             }
         }
     } else {
+        // The selection goes down first, so the characters land on top of it rather than being
+        // covered by it. A selection nobody can see is worse than none: the next key replaces text
+        // the user did not know was chosen.
+        if let Some((from, to)) = field.selection() {
+            paint::text_selection(
+                c,
+                text_x,
+                field_r.y0 + 3,
+                field_r.y0 + 3 + body.line_height(),
+                &display,
+                field.display_offset(from),
+                field.display_offset(to),
+                body,
+                p.selection.mid(),
+            );
+        }
         c.draw_text_in(
             Rect::new(
                 text_x,
@@ -610,17 +633,9 @@ fn draw_field_centered(
         );
     }
 
-    // Caret. For a masked field, the display is * per char, each one byte, so
-    // the byte offset of the cursor in the masked text equals the number of real
-    // characters before the cursor.
-    let cursor_display_offset = if field.is_masked() {
-        field.text()[..field.cursor().min(field.text().len())]
-            .chars()
-            .count()
-    } else {
-        field.cursor()
-    };
-    let before = &display[..cursor_display_offset.min(display.len())];
+    // Caret. `display_offset` is the conversion for a masked field, where the display is one `*`
+    // per character and a byte offset into the password is not one into the stars.
+    let before = &display[..field.display_offset(field.cursor()).min(display.len())];
     let cx = text_x + body.measure(before);
     c.fill_rect(Rect::new(cx, field_r.y0 + 3, cx + 1, field_r.y1 - 3), p.accent);
 
@@ -844,7 +859,7 @@ mod tests {
             let mut login = Login::new(12345, "abcdef");
             login.code_sent = true;
             login.screen = Screen::Code {
-                field: TextField::with_limit(8),
+                field: digits_field(8),
                 length: Some(5),
                 error: None,
             };
@@ -873,7 +888,7 @@ mod tests {
         {
             let mut login = Login::new(12345, "abcdef");
             login.screen = Screen::Phone {
-                field: TextField::with_limit(16),
+                field: digits_field(16),
                 error: Some("Número não reconhecido".into()),
             };
             let mut c = symbian_ui::Canvas::from_slice(&mut buf, sz);

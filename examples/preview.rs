@@ -54,6 +54,25 @@ fn render(dark: &symbian_ui::Theme<'_>, light: &symbian_ui::Theme<'_>) {
 
     shot("15-cyrillic", dark, &[Key::Down, Key::Down, Key::Select]);
     shot("16-chats-light", light, &[]);
+
+    // The link question, over a real transcript. Drawn here rather than reached through keys
+    // because what is being judged is the *overlay* — whether the panel reads as being in front of
+    // the conversation — and that is a picture, not a behaviour.
+    for (name, theme) in [("17-link-modal", dark), ("18-link-modal-light", light)] {
+        let mut app = tg::App::mock();
+        app.handle_key(KeyEvent::new(Key::Select), theme, rect);
+        let mut s = Sheet::new(E72_SCREEN);
+        {
+            let mut c = s.canvas();
+            app.draw(&mut c, theme);
+            let mut m = symbian_ui::Modal::new("Abrir link", "https://exemplo.com/uma/pagina?x=1")
+                .choice("Copiar e abrir com Web", 0u8)
+                .choice("Apenas abrir com Web", 1u8)
+                .choice("Copiar link", 2u8);
+            m.draw(&mut c, theme);
+        }
+        s.save(OUT, name);
+    }
     let _ = Softkey::Left;
 
     // Login screens.

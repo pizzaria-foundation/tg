@@ -16,6 +16,8 @@ pub mod login;
 pub mod session_store;
 pub mod selfcheck;
 pub mod chats;
+/// The dialog list built declaratively, beside the hand-written one. See the module header.
+pub mod chats_decl;
 pub mod conv;
 pub mod store_cache;
 pub mod model;
@@ -45,6 +47,45 @@ enum Screen {
     /// nothing about chats, and backing out has to return to the transcript rather than to
     /// the chat list, which would lose the reader's place.
     Viewer(symbian_ui::Viewer, usize),
+}
+
+/// What to do with a link after asking the launcher to take it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LinkPlan {
+    /// A launcher heard it. Nothing more for this client to do.
+    LauncherWillHandleIt,
+    /// No launcher is installed, so there is no registry to consult and nobody to ask. Do what the
+    /// phone itself would do.
+    FallBackToBrowser,
+    /// Something else went wrong, and saying so beats pretending.
+    Failed(symbian::error::Error),
+}
+
+/// Decide, from what the platform answered, what should happen to a link.
+///
+/// Pure on purpose. The interesting case — no launcher installed — is otherwise reachable only by
+/// uninstalling the launcher, which is not a thing anybody will do to check a fallback, so it would
+/// have shipped untested. Split out, every branch is a host test.
+///
+/// * `rang` — whether `intent::signal` succeeded. It writes to a property the *launcher* defines,
+///   so success proves one is installed and has run.
+/// * `launch` — what `apps::launch` answered, when it was tried at all. `None` means it was not:
+///   the bell was heard, so there was nothing to start.
+pub fn link_plan(rang: bool, launch: Option<Option<symbian::error::Error>>) -> LinkPlan {
+    use symbian::error::Error;
+    if rang {
+        return LinkPlan::LauncherWillHandleIt;
+    }
+    match launch {
+        // Started it: it reads what is pending on the way up.
+        Some(None) => LinkPlan::LauncherWillHandleIt,
+        // No such application. Not transient, and no amount of waiting fixes it.
+        Some(Some(Error::NotFound)) => LinkPlan::FallBackToBrowser,
+        Some(Some(e)) => LinkPlan::Failed(e),
+        // The bell went unheard and nothing was tried — a caller bug, but reporting is better than
+        // claiming success.
+        None => LinkPlan::Failed(Error::NotReady),
+    }
 }
 
 pub struct App {
@@ -362,6 +403,33 @@ impl App {
                         self.refresh_conversation(idx);
                         if let Screen::Conversation(conv) = &mut self.screen {
                             conv.note = Some(self.store.status.clone());
+                        }
+                        Handled::Consumed
+                    }
+                    ConvAction::OpenLink(url) => {
+                        // Handed to the launcher, and that is the whole of this client's part in it.
+                        //
+                        // Which application opens a link, whether to copy it first, how to hand a
+                        // URL to a browser that ignores command lines — none of that is a chat
+                        // client's business. It is one decision, made in one place, for every
+                        // application on the phone; a copy of it here would be a second place for
+                        // the answer to differ. This knows there is a launcher and nothing else.
+                        let note = self.post_link(&url);
+                        if let Screen::Conversation(conv) = &mut self.screen {
+                            conv.note = Some(note);
+                        }
+                        Handled::Consumed
+                    }
+                    ConvAction::Copy(text) => {
+                        // The screen already said "copiado" when it decided what was meant. If the
+                        // clipboard refuses — a build without USE_CLIPBOARD, a platform that says
+                        // no — that promise has to be taken back, or the user pastes into Notes and
+                        // finds whatever they copied an hour ago.
+                        if symbian::clipboard::set_text(&text).is_err() {
+                            symbian::log!("[tg] clipboard refused {} chars", text.len());
+                            if let Screen::Conversation(conv) = &mut self.screen {
+                                conv.note = Some(String::from("nao foi possivel copiar"));
+                            }
                         }
                         Handled::Consumed
                     }
@@ -1132,6 +1200,36 @@ impl App {
         }
     }
 
+    /// Hand a link to the launcher, and say honestly whether anybody will hear it.
+    ///
+    /// The *decision* is [`link_plan`], which is pure and tested on the host — including the
+    /// "no launcher installed" case, which is otherwise only reachable by uninstalling the
+    /// launcher, and nobody is going to do that to check a fallback. What is left here is the
+    /// effects: write, ring, launch, and whatever the plan says to do about it.
+    fn post_link(&mut self, url: &str) -> alloc::string::String {
+        if let Err(e) = symbian::intent::write_request(&mut symbian::ShimFs, url) {
+            return alloc::format!("nao consegui pedir: {e:?}");
+        }
+        let rang = symbian::intent::signal().is_ok();
+        // Only when the bell went unheard is it worth starting anything: a launcher that defined
+        // the property is a launcher that is running.
+        let launched = if rang { None } else { Some(symbian::apps::launch(symbian::intent::LAUNCHER_UID)) };
+
+        match link_plan(rang, launched.as_ref().map(|r| r.as_ref().err().copied())) {
+            LinkPlan::LauncherWillHandleIt => alloc::format!("abrindo {url}"),
+            LinkPlan::FallBackToBrowser => {
+                // Take the request back off the disk first: nobody will ever read it, and one left
+                // behind is a link from today opening by itself on some future first run.
+                let _ = symbian::intent::take_request(&mut symbian::ShimFs);
+                match symbian::apps::open_at(symbian::handlers::NATIVE_BROWSER, url) {
+                    Ok(()) => alloc::format!("abrindo {url}"),
+                    Err(e) => alloc::format!("nao abriu: {e:?}"),
+                }
+            }
+            LinkPlan::Failed(e) => alloc::format!("nao consegui pedir: {e:?}"),
+        }
+    }
+
     fn paint(&mut self, c: &mut Canvas<'_>, theme: &Theme<'_>) {
         match &mut self.screen {
             Screen::Login => self.login.draw(c, theme),
@@ -1641,5 +1739,51 @@ mod tests {
             let mut c = Canvas::from_slice(&mut buf, SCREEN);
             app.draw(&mut c, &t);
         }
+    }
+}
+
+#[cfg(test)]
+mod link_plan_tests {
+    use super::*;
+    use symbian::error::Error;
+
+    #[test]
+    fn a_launcher_that_answered_the_bell_handles_it() {
+        // `signal` writes to a property the launcher defines. Succeeding proves one is installed
+        // and has run, which is the only positive evidence available — writing the request file
+        // proves nothing, because `C:\Data` accepts a write from anybody.
+        assert_eq!(link_plan(true, None), LinkPlan::LauncherWillHandleIt);
+        // And nothing is started when the bell was heard.
+        assert_eq!(link_plan(true, Some(Some(Error::NotFound))), LinkPlan::LauncherWillHandleIt);
+    }
+
+    #[test]
+    fn a_launcher_that_was_merely_asleep_is_started() {
+        // The cold case: no launcher has run since boot, so the property does not exist yet. The
+        // launch works and it reads what is pending on the way up.
+        assert_eq!(link_plan(false, Some(None)), LinkPlan::LauncherWillHandleIt);
+    }
+
+    #[test]
+    fn no_launcher_installed_falls_back_to_the_phone_itself() {
+        // The case this test module exists for. Reaching it on the handset means uninstalling the
+        // launcher, which nobody is going to do to check a fallback — so without this it would have
+        // shipped on the strength of me having read it.
+        assert_eq!(link_plan(false, Some(Some(Error::NotFound))), LinkPlan::FallBackToBrowser);
+    }
+
+    #[test]
+    fn any_other_failure_is_reported_rather_than_dressed_up() {
+        // The failure mode this whole arrangement exists to prevent is a link that claims to be
+        // opening and never will. An unexpected error must not be quietly turned into a fallback
+        // either — that would open a browser on a phone whose launcher is merely broken.
+        assert_eq!(link_plan(false, Some(Some(Error::NoMemory))), LinkPlan::Failed(Error::NoMemory));
+        assert_eq!(link_plan(false, Some(Some(Error::AccessDenied))), LinkPlan::Failed(Error::AccessDenied));
+    }
+
+    #[test]
+    fn a_bell_nobody_heard_and_nothing_tried_is_not_success() {
+        // A caller bug rather than a device state, and the honest answer is still not "abrindo".
+        assert_eq!(link_plan(false, None), LinkPlan::Failed(Error::NotReady));
     }
 }

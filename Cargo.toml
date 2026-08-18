@@ -33,6 +33,7 @@ symbian-app = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2
 symbian-crypto = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
 symbian-sim = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
 symbian-preview = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
+symbian-decl-ui = { git = "ssh://git@github.com/pizzaria-foundation/epoc", rev = "f2451dc2fe3a182e2e5e02e3c753440d7c073d0c" }
 
 # Mirrors the SDK's device profile: small binaries matter on a phone with ~30 MB of usable
 # RAM and a ~100 KB-per-page demand loader.
@@ -85,3 +86,29 @@ symbian-app = { workspace = true }
 symbian-sys = { workspace = true }
 symbian-crypto = { workspace = true }
 tg-proto = { workspace = true }
+# The declarative screen layer. One screen is written against it today (`chats_decl`) and compared
+# pixel-for-pixel with the hand-written one; see that module's header for what the comparison is
+# for and what it has found.
+symbian-decl-ui = { workspace = true }
+
+# Local SDK checkout, for developing this app and the SDK together. The `rev` pins above remain the
+# source of truth and MUST be bumped to a commit that contains `symbian-decl-ui` before this builds
+# anywhere but this machine — the crate is not in the pinned revision at all.
+[patch."ssh://git@github.com/pizzaria-foundation/epoc"]
+symbian = { path = "../SDK/crates/symbian" }
+symbian-ui = { path = "../SDK/crates/symbian-ui" }
+symbian-gfx = { path = "../SDK/crates/symbian-gfx" }
+symbian-sys = { path = "../SDK/crates/symbian-sys" }
+symbian-app = { path = "../SDK/crates/symbian-app" }
+symbian-crypto = { path = "../SDK/crates/symbian-crypto" }
+symbian-sim = { path = "../SDK/crates/symbian-sim" }
+symbian-preview = { path = "../SDK/crates/symbian-preview" }
+symbian-decl-ui = { path = "../SDK/crates/symbian-decl-ui" }
+
+# `test = true` so `cargo test` runs the parity assertion, not only an explicit
+# `--example chats_parity`. A comparison nobody runs is a comparison that is already stale — and this
+# one is the acceptance criterion for the declarative rewrite of the screen, so it has to be able to
+# fail the build. Same standing as `symbian-decl-ui`'s `compare` example.
+[[example]]
+name = "chats_parity"
+test = true
