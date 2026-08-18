@@ -19,13 +19,15 @@ pub mod chats;
 /// The dialog list built declaratively, beside the hand-written one. See the module header.
 pub mod chats_decl;
 pub mod conv;
+/// The application as model-update-view, with the screens that are still hand-written behind an
+/// adapter. See the module header for the shape of the migration.
+pub mod mvu;
 pub mod store_cache;
 pub mod model;
 
 use alloc::string::String;
 use symbian_ui::{Canvas, Handled, KeyEvent, Rect, Theme};
 
-use chats::{ChatList, ChatListAction};
 use conv::{ConvAction, Conversation};
 use login::{Login, LoginAction};
 use model::{Delivery, Message, Store};
@@ -33,7 +35,19 @@ use model::{Delivery, Message, Store};
 /// Which screen is in front. A two-level stack is all this app needs, so it is an
 /// enum rather than a `Vec<Box<dyn Screen>>`.
 enum Screen {
-    Chats(ChatList),
+    /// The dialog list — declarative now, so this variant carries nothing.
+    ///
+    /// It used to hold a `ChatList`, which owned the selection and answered the keys. Both moved:
+    /// the cursor is [`App::chats_selected`] and the screen is described by
+    /// [`chats_decl`](crate::chats_decl) and driven by [`mvu`](crate::mvu). What is left here is
+    /// the fact that the list is what is in front, which is what every `match` in this file wants
+    /// to know.
+    ///
+    /// So this variant is a marker, and the arms for it in `on_key` and `paint` are deliberately
+    /// empty: on this screen neither is called, because the bridge has the tree and the tree has no
+    /// adapter in it. `chats.rs` is still here and still tested — as the *reference* the parity
+    /// comparison in `examples/chats_parity.rs` measures the declarative screen against.
+    Chats,
     Conversation(Conversation),
     /// The login screens. The [`Login`] itself lives on [`App`] rather than in here.
     ///
@@ -98,6 +112,13 @@ pub struct App {
     screen: Screen,
     /// Set when the app wants to close, for the shim to act on.
     pub should_exit: bool,
+    /// Which dialog is highlighted.
+    ///
+    /// On the application rather than inside the screen, which is the whole of the first screen's
+    /// migration: the declarative list is rebuilt every time the model changes and cannot be where
+    /// the cursor lives. It is read by `mvu::Tg::view` and written by `update` — and by the way out
+    /// of a conversation, which is why coming back lands on the chat you left rather than at the top.
+    pub(crate) chats_selected: usize,
     /// Set while a chat's history is loading; the screen stays on ChatList until the
     /// reply arrives, so the user never sees a conversation with just one message.
     opening_chat: Option<usize>,
@@ -174,8 +195,9 @@ impl App {
             driver: None,
             store,
             login: Login::new(0, ""),
-            screen: Screen::Chats(ChatList::new()),
+            screen: Screen::Chats,
             should_exit: false,
+            chats_selected: 0,
             opening_chat: None,
             dialogs_from_top: true,
             pending: None,
@@ -233,6 +255,7 @@ impl App {
             login,
             screen: Screen::Login,
             should_exit: false,
+            chats_selected: 0,
             opening_chat: None,
             dialogs_from_top: true,
             pending: None,
@@ -250,6 +273,7 @@ impl App {
             login: Login::new(0, ""),
             screen: Screen::Login,
             should_exit: false,
+            chats_selected: 0,
             opening_chat: None,
             dialogs_from_top: true,
             pending: None,
@@ -328,50 +352,15 @@ impl App {
                     LoginAction::None => handled,
                 }
             }
-            Screen::Chats(list) => {
-                let frame = symbian_ui::Frame::split(screen_rect, theme, true, true);
-                let (handled, action) =
-                    list.handle_key(ev, &self.store, theme, frame.content.height());
-                if handled.is_consumed() && matches!(action, ChatListAction::None) {
-                    return handled;
-                }
-                match action {
-                    ChatListAction::Open(i) => {
-                        self.open_chat(i);
-                        Handled::Consumed
-                    }
-                    ChatListAction::Exit => {
-                        self.should_exit = true;
-                        Handled::Consumed
-                    }
-                    ChatListAction::LoadMore => {
-                        self.load_more_dialogs();
-                        Handled::Consumed
-                    }
-                    ChatListAction::Refresh => {
-                        self.refresh_dialogs();
-                        Handled::Consumed
-                    }
-                    ChatListAction::None => {
-                        // Handled wasn't consumed, try activate for softkeys/Select.
-                        match list.activate(ev, &self.store) {
-                            ChatListAction::Open(i) => {
-                                self.open_chat(i);
-                                Handled::Consumed
-                            }
-                            ChatListAction::Exit => {
-                                self.should_exit = true;
-                                Handled::Consumed
-                            }
-                            ChatListAction::Refresh => {
-                                self.refresh_dialogs();
-                                Handled::Consumed
-                            }
-                            _ => Handled::Ignored,
-                        }
-                    }
-                }
-            }
+            // The dialog list does not arrive here any more.
+            //
+            // Its keys are routed by `mvu::Tg` — `chats_decl::on_key` for the softkeys and the
+            // green key, the list widget itself for navigation and for the request for another
+            // page — and this function is only reached through the adapter that wraps the screens
+            // still written by hand. There is no adapter on the chat list, so there is no path to
+            // this arm; `Ignored` rather than `unreachable!()`, because a panic on a phone whose
+            // whole failure report is a dialog with a number in it is not worth being right about.
+            Screen::Chats => Handled::Ignored,
             Screen::Conversation(conv) => {
                 let idx = conv.chat;
                 let (handled, action) =
@@ -386,9 +375,11 @@ impl App {
                         if let Some(c) = self.store.chats.get(idx) {
                             store_cache::save_tail(&mut symbian::ShimFs, c);
                         }
-                        let mut list = ChatList::new();
-                        list.state.selected = idx;
-                        self.screen = Screen::Chats(list);
+                        // Coming back lands on the chat just left, not at the top of the list.
+                        // The cursor is the application's now, so this is a field rather than a
+                        // screen object built with its state pre-set.
+                        self.chats_selected = idx;
+                        self.screen = Screen::Chats;
                         Handled::Consumed
                     }
                     ConvAction::Send(text) => {
@@ -454,7 +445,7 @@ impl App {
                         let chat = *from_chat;
                         self.screen = match self.store.chats.get(chat) {
                             Some(_) => Screen::Conversation(Conversation::new(chat)),
-                            None => Screen::Chats(ChatList::new()),
+                            None => Screen::Chats,
                         };
                         Handled::Consumed
                     }
@@ -589,7 +580,7 @@ impl App {
     /// conversation flashes as a single bubble for as long as GPRS takes — so opening a
     /// chat means staring at the list for several seconds. With one, the transcript is
     /// there immediately and the request behind it is an update.
-    fn open_chat(&mut self, i: usize) {
+    pub(crate) fn open_chat(&mut self, i: usize) {
         // Opening a chat clears its unread marker, as it would once messages.readHistory
         // is wired up.
         if let Some(c) = self.store.chats.get_mut(i) {
@@ -644,7 +635,7 @@ impl App {
     /// Ask for the page of dialogs below what the list already holds.
     ///
     /// Does nothing when a page is already in flight or every dialog is already here.
-    fn load_more_dialogs(&mut self) {
+    pub(crate) fn load_more_dialogs(&mut self) {
         if self.store.dialogs_loading || self.store.dialogs_complete {
             return;
         }
@@ -674,7 +665,7 @@ impl App {
     ///
     /// Unlike [`Self::load_more_dialogs`] this asks from offset zero and replaces what is
     /// held, rather than appending a page below it.
-    fn refresh_dialogs(&mut self) {
+    pub(crate) fn refresh_dialogs(&mut self) {
         if self.store.dialogs_loading {
             self.store.status = String::from("ja atualizando...");
             return;
@@ -1233,7 +1224,10 @@ impl App {
     fn paint(&mut self, c: &mut Canvas<'_>, theme: &Theme<'_>) {
         match &mut self.screen {
             Screen::Login => self.login.draw(c, theme),
-            Screen::Chats(list) => list.draw(c, &self.store, theme),
+            // Nothing: the dialog list is a declarative tree that the bridge draws directly, and
+            // this function is only called through the adapter around the hand-written screens. See
+            // the `Screen::Chats` variant.
+            Screen::Chats => {}
             Screen::Conversation(conv) => {
                 let idx = conv.chat;
                 // Split the borrow: the screen needs &mut, the chat needs &.
@@ -1243,6 +1237,16 @@ impl App {
             // The strings are the app's: the SDK's viewer ships no text.
             Screen::Viewer(v, _) => v.draw(c, theme, "Foto", "Voltar"),
         }
+    }
+
+    /// Whether the dialog list is what is in front.
+    ///
+    /// Asked by [`mvu`](crate::mvu) on every key and every view: it is the one branch that decides
+    /// whether a screen is described declaratively or reached through the adapter. A method rather
+    /// than a public `screen` field, because the enum is this module's business and the answer is
+    /// the only part of it anyone outside needs.
+    pub(crate) fn on_chat_list(&self) -> bool {
+        matches!(self.screen, Screen::Chats)
     }
 
     /// Which screen is showing, for tests and for the shim's title handling.
@@ -1402,7 +1406,7 @@ still active={} mode={} flags={} done={} error={}",
         match outcome {
             driver::Outcome::Redraw => Handled::Consumed,
             driver::Outcome::Authorized => {
-                self.screen = Screen::Chats(ChatList::new());
+                self.screen = Screen::Chats;
                 // The list shows the cached one until this comes back, and nothing at all if
                 // there is no cache. Asked for here rather than when the list is first
                 // drawn, because drawing must not start a round trip.
@@ -1521,27 +1525,48 @@ mod tests {
 
     const SCREEN: Size = Size::new(320, 240);
 
+    /// The client as the hosts run it: the bridge, the adapter, and the declarative dialog list.
+    ///
+    /// Every test below goes through this rather than through [`App`] directly, because the
+    /// application the device runs is this one — `App` is what is left of it, and on the chat list it
+    /// no longer answers keys at all.
+    fn shell() -> mvu::Shell {
+        mvu::mock()
+    }
+
+    /// One frame, into a throwaway buffer.
+    ///
+    /// Needed before a key can reach a *widget*: the walk asks each one at the rect the layout gave
+    /// it. The bridge will build and place a tree on the spot if there is none — so this is about
+    /// exercising the same order the device does, not about making the keys work.
+    fn frame(app: &mut impl symbian_ui::App, t: &Theme<'_>) {
+        let mut buf = alloc::vec![0u16; (SCREEN.w * SCREEN.h) as usize];
+        let mut c = Canvas::from_slice(&mut buf, SCREEN);
+        app.draw(&mut c, t);
+    }
+
     #[test]
     fn opening_a_chat_clears_its_unread_count_and_returning_keeps_the_place() {
         let data = atlas();
         let f = BitmapFont::new(&data).unwrap();
         let t = Theme::dark(Fonts { body: &f, strong: &f, small: &f, title: &f });
         let r = Rect::from_size(SCREEN);
-        let mut app = App::mock();
+        let mut app = shell();
+        frame(&mut app, &t);
 
         app.handle_key(KeyEvent::new(Key::Down), &t, r); // select chat 1
-        assert!(app.store.chats[1].unread > 0);
+        assert_eq!(app.app().chats_selected, 1, "the list reported where its cursor went");
+        assert!(app.app().store.chats[1].unread > 0);
         app.handle_key(KeyEvent::new(Key::Select), &t, r);
-        assert_eq!(app.in_conversation(), Some(1));
-        assert_eq!(app.store.chats[1].unread, 0);
+        assert_eq!(app.app().in_conversation(), Some(1));
+        assert_eq!(app.app().store.chats[1].unread, 0);
 
+        frame(&mut app, &t);
         app.handle_key(KeyEvent::new(Key::Softkey(Softkey::Right)), &t, r);
-        assert_eq!(app.in_conversation(), None);
-        // Coming back should land on the chat we just left, not the top.
-        match &app.screen {
-            Screen::Chats(l) => assert_eq!(l.state.selected, 1),
-            _ => panic!(),
-        }
+        assert_eq!(app.app().in_conversation(), None);
+        // Coming back should land on the chat we just left, not the top. The cursor is the
+        // application's now, so this reads a field instead of reaching inside a screen object.
+        assert_eq!(app.app().chats_selected, 1);
     }
 
     /// Hold Down past the bottom of the chat list.
@@ -1559,25 +1584,23 @@ mod tests {
         let f = BitmapFont::new(&data).unwrap();
         let t = Theme::dark(Fonts { body: &f, strong: &f, small: &f, title: &f });
         let r = Rect::from_size(SCREEN);
-        let mut app = App::mock();
+        let mut app = shell();
+        frame(&mut app, &t);
 
-        let n = app.store.chats.len();
+        let n = app.app().store.chats.len();
         assert!(n > 0, "the mock store must have chats for this to mean anything");
         for _ in 0..(n + 20) {
             app.handle_key(KeyEvent::new(Key::Down), &t, r);
         }
-        match &app.screen {
-            Screen::Chats(l) => {
-                assert!(l.state.selected < app.store.chats.len(), "selection left the list");
-            }
-            _ => panic!("the chat list should still be on screen"),
-        }
+        assert!(app.app().on_chat_list(), "the chat list should still be on screen");
+        assert!(app.app().chats_selected < app.app().store.chats.len(), "selection left the list");
+        // Every press arrived, too: the list clamps at the end, and each Down past it asks for
+        // another page rather than going missing between frames.
+        assert_eq!(app.app().chats_selected, n - 1);
 
         // And a repaint afterwards, because a selection that survived the key handler can
         // still be out of range for the drawing code that indexes `store.chats` directly.
-        let mut buf = alloc::vec![0u16; (SCREEN.w * SCREEN.h) as usize];
-        let mut c = Canvas::from_slice(&mut buf, SCREEN);
-        app.draw(&mut c, &t);
+        frame(&mut app, &t);
     }
 
     /// The reply to that request, when the server has nothing left to send.
@@ -1590,8 +1613,9 @@ mod tests {
         let f = BitmapFont::new(&data).unwrap();
         let t = Theme::dark(Fonts { body: &f, strong: &f, small: &f, title: &f });
         let r = Rect::from_size(SCREEN);
-        let mut app = App::mock();
-        let before = app.store.chats.len();
+        let mut app = shell();
+        frame(&mut app, &t);
+        let before = app.app().store.chats.len();
 
         for _ in 0..(before + 5) {
             app.handle_key(KeyEvent::new(Key::Down), &t, r);
@@ -1605,16 +1629,17 @@ mod tests {
             .raw(&empty_vector())
             .raw(&empty_vector())
             .raw(&empty_vector());
-        app.dialogs_from_top = false;
-        app.on_answer(driver::TAG_DIALOGS, &w.finish(), 1_700_000_000);
+        let body = w.finish();
+        app.with_app(|a| {
+            a.dialogs_from_top = false;
+            a.on_answer(driver::TAG_DIALOGS, &body, 1_700_000_000);
+        });
 
-        assert_eq!(app.store.chats.len(), before, "an empty page must add nothing");
-        assert!(!app.store.dialogs_loading, "still claiming to load after the last page");
-        assert!(app.store.dialogs_complete, "must stop asking, or every Down spends a request");
+        assert_eq!(app.app().store.chats.len(), before, "an empty page must add nothing");
+        assert!(!app.app().store.dialogs_loading, "still claiming to load after the last page");
+        assert!(app.app().store.dialogs_complete, "must stop asking, or every Down spends a request");
 
-        let mut buf = alloc::vec![0u16; (SCREEN.w * SCREEN.h) as usize];
-        let mut c = Canvas::from_slice(&mut buf, SCREEN);
-        app.draw(&mut c, &t);
+        frame(&mut app, &t);
     }
 
     fn empty_vector() -> alloc::vec::Vec<u8> {
@@ -1629,15 +1654,17 @@ mod tests {
         let f = BitmapFont::new(&data).unwrap();
         let t = Theme::dark(Fonts { body: &f, strong: &f, small: &f, title: &f });
         let r = Rect::from_size(SCREEN);
-        let mut app = App::mock();
+        let mut app = shell();
+        frame(&mut app, &t);
         app.handle_key(KeyEvent::new(Key::Select), &t, r);
 
-        let before = app.store.chats[0].messages.len();
+        let before = app.app().store.chats[0].messages.len();
         for ch in "teste".chars() {
             app.handle_key(KeyEvent::new(Key::Char(ch)), &t, r);
         }
         app.handle_key(KeyEvent::new(Key::Softkey(Softkey::Middle)), &t, r);
 
+        let app = app.app();
         let msgs = &app.store.chats[0].messages;
         assert_eq!(msgs.len(), before + 1);
         let last = msgs.last().unwrap();
@@ -1652,10 +1679,13 @@ mod tests {
         let f = BitmapFont::new(&data).unwrap();
         let t = Theme::dark(Fonts { body: &f, strong: &f, small: &f, title: &f });
         let r = Rect::from_size(SCREEN);
-        let mut app = App::mock();
-        assert!(!app.should_exit);
+        let mut app = shell();
+        frame(&mut app, &t);
+        assert!(!app.should_exit());
         app.handle_key(KeyEvent::new(Key::Softkey(Softkey::Right)), &t, r);
-        assert!(app.should_exit);
+        // Through the bridge's flag rather than the application's: "Sair" on the declarative list is
+        // `Cmd::Exit`. The host asks one question and both halves answer it — see `Shell::should_exit`.
+        assert!(app.should_exit());
     }
 
     #[test]
@@ -1666,14 +1696,16 @@ mod tests {
         let f = BitmapFont::new(&data).unwrap();
         let t = Theme::dark(Fonts { body: &f, strong: &f, small: &f, title: &f });
         let r = Rect::from_size(SCREEN);
-        let mut app = App::mock();
+        let mut app = shell();
+        frame(&mut app, &t);
         app.handle_key(KeyEvent::new(Key::Select), &t, r);
+        frame(&mut app, &t);
         for ch in "meio escrito".chars() {
             app.handle_key(KeyEvent::new(Key::Char(ch)), &t, r);
         }
-        assert!(!app.should_exit);
+        assert!(!app.should_exit());
         assert_eq!(app.handle_key(KeyEvent::new(Key::End), &t, r), Handled::Consumed);
-        assert!(app.should_exit);
+        assert!(app.should_exit());
     }
 
     #[test]
@@ -1683,7 +1715,7 @@ mod tests {
         let t = Theme::dark(Fonts { body: &f, strong: &f, small: &f, title: &f });
         let r = Rect::from_size(SCREEN);
         let mut buf = alloc::vec![0u16; (SCREEN.w * SCREEN.h) as usize];
-        let mut app = App::mock();
+        let mut app = shell();
 
         // Chat list, then every conversation. Canvas clipping would panic on an
         // out-of-range write, so completing this is the assertion.
@@ -1691,8 +1723,10 @@ mod tests {
             let mut c = Canvas::from_slice(&mut buf, SCREEN);
             app.draw(&mut c, &t);
         }
-        for i in 0..app.store.chats.len() {
-            let mut app = App::mock();
+        let chats = app.app().store.chats.len();
+        for i in 0..chats {
+            let mut app = shell();
+            frame(&mut app, &t);
             for _ in 0..i {
                 app.handle_key(KeyEvent::new(Key::Down), &t, r);
             }
@@ -1703,7 +1737,7 @@ mod tests {
 
         // Login screens: phone, code, password.
         {
-            let mut login = App::mock_login();
+            let mut login = mvu::mock_login();
             let mut c = Canvas::from_slice(&mut buf, SCREEN);
             login.draw(&mut c, &t);
         }
@@ -1717,7 +1751,8 @@ mod tests {
                 length: Some(5),
                 error: None,
             };
-            let mut app = App { driver: None, store: Store::mock(), login, screen: super::Screen::Login, should_exit: false, opening_chat: None, dialogs_from_top: true, pending: None, decoding: None, decode_src: "", decode_watchdog: None };
+            let app = App { driver: None, store: Store::mock(), login, screen: super::Screen::Login, should_exit: false, chats_selected: 0, opening_chat: None, dialogs_from_top: true, pending: None, decoding: None, decode_src: "", decode_watchdog: None };
+            let mut app = mvu::Shell::new(app);
             let mut c = Canvas::from_slice(&mut buf, SCREEN);
             app.draw(&mut c, &t);
         }
@@ -1735,7 +1770,8 @@ mod tests {
                 hint: String::new(),
                 error: None,
             };
-            let mut app = App { driver: None, store: Store::mock(), login, screen: super::Screen::Login, should_exit: false, opening_chat: None, dialogs_from_top: true, pending: None, decoding: None, decode_src: "", decode_watchdog: None };
+            let app = App { driver: None, store: Store::mock(), login, screen: super::Screen::Login, should_exit: false, chats_selected: 0, opening_chat: None, dialogs_from_top: true, pending: None, decoding: None, decode_src: "", decode_watchdog: None };
+            let mut app = mvu::Shell::new(app);
             let mut c = Canvas::from_slice(&mut buf, SCREEN);
             app.draw(&mut c, &t);
         }

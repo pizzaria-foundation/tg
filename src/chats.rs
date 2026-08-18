@@ -1,4 +1,16 @@
-//! The dialog list.
+//! The dialog list, as it was drawn by hand.
+//!
+//! # Not on screen any more, and deliberately still here
+//!
+//! The list the application shows is [`crate::chats_decl`], described rather than placed, and this
+//! module is what it is measured against: `examples/chats_parity.rs` renders both from the same store
+//! in nine states and compares the buffers pixel for pixel. Deleting this file would delete the
+//! comparison with it, and with it every future frame's evidence that the screen still looks like the
+//! screen — so it stays, unreferenced by the application and referenced by the test that matters.
+//!
+//! Nothing here should change. A change on this side moves the reference, and a reference that moves
+//! to agree with the thing it is checking is not a reference. If a difference turns up, read it: the
+//! declarative side is the one that is allowed to be wrong.
 
 use symbian_ui::{
     chrome, list::Uniform, Align, Canvas, Frame, Handled, Key, KeyEvent, ListState, Rect, Theme,

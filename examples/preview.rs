@@ -29,9 +29,17 @@ fn render(dark: &symbian_ui::Theme<'_>, light: &symbian_ui::Theme<'_>) {
     use symbian_ui::{Key, KeyEvent, Softkey};
 
     let shot = |name: &str, theme: &symbian_ui::Theme<'_>, keys: &[Key]| {
-        let mut app = tg::App::mock();
-        for k in keys {
-            app.handle_key(KeyEvent::new(*k), theme, rect);
+        let mut app = tg::mvu::mock();
+        // A frame before the keys, then one after each: the device draws between batches of events,
+        // and a screenshot taken any other way is of a state the phone never shows. It also keeps
+        // the scroll offset honest — a list derives it from the selection while being laid out.
+        {
+            let mut warm = Sheet::new(E72_SCREEN);
+            app.draw(&mut warm.canvas(), theme);
+            for k in keys {
+                app.handle_key(KeyEvent::new(*k), theme, rect);
+                app.draw(&mut warm.canvas(), theme);
+            }
         }
         let mut s = Sheet::new(E72_SCREEN);
         {
@@ -59,7 +67,11 @@ fn render(dark: &symbian_ui::Theme<'_>, light: &symbian_ui::Theme<'_>) {
     // because what is being judged is the *overlay* — whether the panel reads as being in front of
     // the conversation — and that is a picture, not a behaviour.
     for (name, theme) in [("17-link-modal", dark), ("18-link-modal-light", light)] {
-        let mut app = tg::App::mock();
+        let mut app = tg::mvu::mock();
+        {
+            let mut warm = Sheet::new(E72_SCREEN);
+            app.draw(&mut warm.canvas(), theme);
+        }
         app.handle_key(KeyEvent::new(Key::Select), theme, rect);
         let mut s = Sheet::new(E72_SCREEN);
         {

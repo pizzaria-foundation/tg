@@ -31,10 +31,14 @@ fn worker(opcode: i32, input: &[u8], out: &mut [u8]) -> i32 {
 static _CHATS_LINK: fn(&[u8]) -> Result<tg_proto::chats::Dialogs, tg_proto::walk::Error> =
     tg_proto::chats::parse_dialogs;
 
-/// `App::login()` rather than `App::mock()`.
+/// `mvu::live()` rather than `mvu::mock()`.
 ///
-/// It opens the connection as it is constructed — attaching to whatever is already up takes
-/// 263 ms on this handset — so the handshake is running before anyone finishes typing a
-/// phone number. `mock()` still exists for the preview and the tests, which draw the same
-/// screens with nothing behind them.
-symbian_app::entry!(tg::App::login(), work = worker);
+/// It opens the connection as the application inside it is constructed — attaching to whatever is
+/// already up takes 263 ms on this handset — so the handshake is running before anyone finishes
+/// typing a phone number. `mvu::mock()` still exists for the preview and the tests, which draw the
+/// same screens with nothing behind them.
+///
+/// Both are `mvu::Shell`: the client is model-update-view behind `symbian-decl-ui`'s bridge, and the
+/// shell is what keeps `handle_raw` — the driver's completions are not keys and are not the bridge's
+/// to route.
+symbian_app::entry!(tg::mvu::live(), work = worker);
