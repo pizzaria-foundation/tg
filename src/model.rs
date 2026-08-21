@@ -1367,6 +1367,12 @@ mod tests {
             fn list_dir(&mut self, _: &[u16], _: &mut [u16]) -> symbian::Result<usize> {
                 Err(symbian::Error::NotFound)
             }
+            fn list_entries(&mut self, _: &[u16], _: &mut [u16]) -> symbian::Result<usize> {
+                Err(symbian::Error::NotFound)
+            }
+            fn stat(&mut self, _: &[u16]) -> symbian::Result<symbian::fs::Stat> {
+                Err(symbian::Error::NotFound)
+            }
             fn delete(&mut self, _: &[u16]) -> symbian::Result<()> {
                 Err(symbian::Error::NotFound)
             }

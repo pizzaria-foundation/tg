@@ -75,7 +75,6 @@ symbian-ui     visual vocabulary + screen arithmetic         tokens, paint, chro
 symbian        safe platform services                        fs, time, net
 symbian-app    device entry points
 symbian-crypto primitives
-epocadb          the dev bridge (dev-only, feature-gated)
 new crate      only when it needs its own dependency graph or an opposed design
 apps/<app>     composition, domain, flow
 ```

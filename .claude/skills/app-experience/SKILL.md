@@ -117,8 +117,8 @@ so a half-read cannot look like a success. Do not fold it into a cache layer.
 ## Network: assume slow, metered, absent, and silent
 
 - **Every wait has a deadline.** A host or peer killed mid-session leaves a socket that
-  is open and silent; no socket error reports that, only a clock. `crates/epocadb` is the
-  worked example — connect timeout, reply timeout, a miss counter, backoff 1 s → 64 s.
+  is open and silent; no socket error reports that, only a clock. So: a connect timeout, a
+  reply timeout, a miss counter, and backoff 1 s → 64 s.
 - **One request in flight per thing.** `load_more_dialogs` returns early when a page is
   already loading or the set is complete. An in-flight guard plus a completion flag,
   always — without them a scroll fires a request per event.
@@ -154,6 +154,6 @@ so a half-read cannot look like a success. Do not fold it into a cache layer.
 - [ ] Every network wait has a deadline, an in-flight guard and a backoff.
 - [ ] The screen still works with no bearer at all.
 - [ ] Nothing new allocates per frame; no unbounded `Vec` grows against a 4 MB heap.
-- [ ] Timings that matter were **measured** on the device (via `Trace` / epocadb — see the
-      `epocadb-logging` skill), not estimated. A wrong measurement looks exactly like a
+- [ ] Timings that matter were **measured** on the device (via `Trace` / the device log — see
+      the `device-logging` skill), not estimated. A wrong measurement looks exactly like a
       right one; sanity-check it against what the hardware can physically do.

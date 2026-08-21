@@ -62,7 +62,7 @@ use symbian_decl_ui::widgets::Node;
 
 use symbian_ui::{Canvas, Handled, KeyEvent, Rect, Theme};
 
-use crate::{chats_decl, conv_decl, login_decl, viewer_decl};
+use crate::{chats_decl, conv_decl, login_decl, menu_decl, viewer_decl};
 use crate::App;
 
 /// Everything the application knows, which for now is the application.
@@ -92,6 +92,8 @@ pub enum Msg {
     Conv(conv_decl::Msg),
     /// The photo viewer said something.
     Viewer(viewer_decl::Msg),
+    /// The Options menu said something.
+    Menu(menu_decl::Msg),
     /// Leave the application. The red key, from any screen.
     Exit,
     /// The imperative side ran; whatever it changed, the screen no longer describes the model.
@@ -129,7 +131,9 @@ impl DeclarativeApp for Tg {
     /// out here would answer the key before the old screen ever saw it.
     fn keys(m: &Model) -> Softkeys<Msg> {
         let app = m.app.borrow();
-        if app.on_chat_list() {
+        if app.on_menu() {
+            menu_decl::softkeys().map(Msg::Menu)
+        } else if app.on_chat_list() {
             chats_decl::softkeys(app.store.dialogs_loading).map(Msg::Chats)
         } else if app.on_login() {
             login_decl::softkeys(&login_decl::State::of(app.login_state())).map(Msg::Login)
@@ -157,6 +161,9 @@ impl DeclarativeApp for Tg {
         // Only the dialog list is claimed at this level. `None` for everything else is what lets the
         // key reach the adapter — the bridge asks the app first, so an arm here would win.
         let app = m.app.borrow();
+        if app.on_menu() {
+            return menu_decl::on_key(ev).map(Msg::Menu);
+        }
         if app.on_chat_list() {
             return chats_decl::on_key(app.store.dialogs_loading, ev).map(Msg::Chats);
         }
@@ -207,6 +214,10 @@ impl DeclarativeApp for Tg {
                     app.refresh_dialogs();
                     Cmd::None
                 }
+                chats_decl::Msg::Options => {
+                    app.open_menu();
+                    Cmd::None
+                }
                 chats_decl::Msg::LoadMore => {
                     app.load_more_dialogs();
                     Cmd::None
@@ -214,6 +225,22 @@ impl DeclarativeApp for Tg {
                 // Through the bridge's flag rather than the app's, so that the one place the host
                 // asks — `should_exit` — is answered by both halves. See [`Shell::should_exit`].
                 chats_decl::Msg::Quit => Cmd::Exit,
+            },
+            Msg::Menu(x) => match x {
+                menu_decl::Msg::Select(i) => {
+                    app.menu_selected = i.min(menu_decl::entries().len().saturating_sub(1));
+                    Cmd::None
+                }
+                menu_decl::Msg::Run => {
+                    if app.menu_run() {
+                        app.close_menu();
+                    }
+                    Cmd::None
+                }
+                menu_decl::Msg::Back => {
+                    app.close_menu();
+                    Cmd::None
+                }
             },
             Msg::Login(l) => match l {
                 // What to submit is the login machine's to decide — this key only says that the
@@ -270,6 +297,14 @@ impl DeclarativeApp for Tg {
         // Read for the length of the build only. What the adapter carries away is the `Rc`, not this
         // borrow — it takes its own, later, when a key or a frame arrives.
         let app = m.app.borrow();
+        if app.on_menu() {
+            return menu_decl::view(
+                app.menu_selected,
+                app.debug_log,
+                &m.out.wrapped(Msg::Menu),
+                slots,
+            );
+        }
         if app.on_chat_list() {
             // The screen owns its own message type; `wrapped` is the door between it and this one.
             // The queue it hands over is a handle on the app's, so the closures inside the widgets
@@ -506,12 +541,51 @@ mod tests {
     }
 
     #[test]
-    fn the_left_softkey_asks_for_the_list_again() {
+    fn the_left_softkey_opens_the_options_menu() {
         with_shell(|shell, t| {
             assert_eq!(press(shell, t, Key::Softkey(Softkey::Left)), Handled::Consumed);
-            // No connection behind the mock, and saying so is the whole of what "Atualizar" can do
+            assert!(shell.app().on_menu(), "the left key is Opções now, not Atualizar");
+            // Its first entry is what the key used to do, and the cursor starts on it — so the
+            // habit of pressing left and then the action key still refreshes the list.
+            assert_eq!(shell.app().menu_selected, 0);
+            assert_eq!(press(shell, t, Key::Softkey(Softkey::Middle)), Handled::Consumed);
+            // No connection behind the mock, and saying so is the whole of what a refresh can do
             // here — what matters is that the message arrived at `refresh_dialogs` at all.
             assert_eq!(shell.app().store.status, "sem conexao");
+            assert!(!shell.app().on_menu(), "and a refresh closes the menu over its own answer");
+        });
+    }
+
+    /// The log switch is the reason the menu exists, so it is worth a test of its own: it flips, it
+    /// says so in its label, and it leaves the menu open to be read.
+    #[test]
+    fn the_log_entry_toggles_and_keeps_the_menu_open() {
+        with_shell(|shell, t| {
+            press(shell, t, Key::Softkey(Softkey::Left));
+            press(shell, t, Key::Down);
+            let was = shell.app().debug_log;
+            let before = crate::menu_decl::label(crate::menu_decl::Action::DebugLog, was);
+
+            press(shell, t, Key::Softkey(Softkey::Middle));
+
+            let now = shell.app().debug_log;
+            assert_eq!(now, !was);
+            assert_ne!(crate::menu_decl::label(crate::menu_decl::Action::DebugLog, now), before);
+            assert!(shell.app().on_menu(), "the label it just changed is on this screen");
+        });
+    }
+
+    /// Voltar changes nothing, which is the whole of what a menu's back key promises.
+    #[test]
+    fn leaving_the_menu_changes_nothing() {
+        with_shell(|shell, t| {
+            let status = shell.app().store.status.clone();
+            press(shell, t, Key::Softkey(Softkey::Left));
+            let was = shell.app().debug_log;
+            press(shell, t, Key::Softkey(Softkey::Right));
+            assert!(!shell.app().on_menu());
+            assert_eq!(shell.app().debug_log, was);
+            assert_eq!(shell.app().store.status, status, "and nothing was asked of the server");
         });
     }
 

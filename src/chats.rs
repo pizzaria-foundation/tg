@@ -74,11 +74,15 @@ impl ChatList {
             chrome::scrollbar(c, frame.content, theme, bar);
         }
 
-        // "Atualizar" on the left. There is no push here — no updates subscription, no long
-        // poll — so the list is only as fresh as the last request, and without a way to ask
-        // again the only remedy is restarting the application.
-        let refresh = if store.dialogs_loading { Some("...") } else { Some("Atualizar") };
-        chrome::softkey_bar(c, frame.softkeys, theme, [refresh, Some("Abrir"), Some("Sair")]);
+        // "Opções" on the left, whose first entry is Atualizar. There is no push here — no updates
+        // subscription, no long poll — so the list is only as fresh as the last request, and without
+        // a way to ask again the only remedy is restarting the application.
+        //
+        // This screen is the *reference* the declarative one is compared against
+        // (`examples/chats_parity.rs`), so the label has to move in both or the comparison starts
+        // failing for a change that was deliberate.
+        let left = if store.dialogs_loading { Some("...") } else { Some("Opções") };
+        chrome::softkey_bar(c, frame.softkeys, theme, [left, Some("Abrir"), Some("Sair")]);
     }
 
     fn draw_row(

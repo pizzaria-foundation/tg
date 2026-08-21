@@ -25,6 +25,8 @@ pub mod conv;
 pub mod conv_decl;
 /// The photo viewer, described around the toolkit's own viewer widget. See the module header.
 pub mod viewer_decl;
+/// The chat list's Options menu. See the module header for why the list grew one.
+pub mod menu_decl;
 /// The application as model-update-view, with the screens that are still hand-written behind an
 /// adapter. See the module header for the shape of the migration.
 pub mod mvu;
@@ -67,6 +69,11 @@ enum Screen {
     /// nothing about chats, and backing out has to return to the transcript rather than to
     /// the chat list, which would lose the reader's place.
     Viewer(viewer_decl::Shared, usize),
+    /// The chat list's Options menu, in front of the list. See [`crate::menu_decl`].
+    ///
+    /// A screen of its own rather than a flag on the list, because that is what it is: the bridge
+    /// draws one tree, and "the list with a menu over it" would be two.
+    Menu,
 }
 
 /// What to do with a link after asking the launcher to take it.
@@ -125,6 +132,14 @@ pub struct App {
     /// the cursor lives. It is read by `mvu::Tg::view` and written by `update` — and by the way out
     /// of a conversation, which is why coming back lands on the chat you left rather than at the top.
     pub(crate) chats_selected: usize,
+    /// Which Options entry is highlighted. Kept across openings, so a menu used twice in a row does
+    /// not start over.
+    pub(crate) menu_selected: usize,
+    /// Whether the device log is being written — the run-time half of `DEBUG=` in `app.conf`.
+    ///
+    /// Read once at startup from `symbian::log::enabled()`: the flag lives in a file, and reading it
+    /// per frame would put a filesystem call under the Options menu.
+    pub(crate) debug_log: bool,
     /// Set while a chat's history is loading; the screen stays on ChatList until the
     /// reply arrives, so the user never sees a conversation with just one message.
     opening_chat: Option<usize>,
@@ -204,6 +219,8 @@ impl App {
             screen: Screen::Chats,
             should_exit: false,
             chats_selected: 0,
+            menu_selected: 0,
+            debug_log: symbian::log::enabled(),
             opening_chat: None,
             dialogs_from_top: true,
             pending: None,
@@ -262,6 +279,8 @@ impl App {
             screen: Screen::Login,
             should_exit: false,
             chats_selected: 0,
+            menu_selected: 0,
+            debug_log: symbian::log::enabled(),
             opening_chat: None,
             dialogs_from_top: true,
             pending: None,
@@ -280,6 +299,8 @@ impl App {
             screen: Screen::Login,
             should_exit: false,
             chats_selected: 0,
+            menu_selected: 0,
+            debug_log: symbian::log::enabled(),
             opening_chat: None,
             dialogs_from_top: true,
             pending: None,
@@ -1286,6 +1307,45 @@ impl App {
         matches!(self.screen, Screen::Chats)
     }
 
+    /// Whether the Options menu is in front.
+    pub(crate) fn on_menu(&self) -> bool {
+        matches!(self.screen, Screen::Menu)
+    }
+
+    /// Open the Options menu over the chat list.
+    pub(crate) fn open_menu(&mut self) {
+        self.screen = Screen::Menu;
+    }
+
+    /// Close it, back to the list it was opened from. The cursor in the list never moved, so there
+    /// is nothing to restore.
+    pub(crate) fn close_menu(&mut self) {
+        self.screen = Screen::Chats;
+    }
+
+    /// Carry out the highlighted entry. Returns whether the menu should close.
+    ///
+    /// Refresh closes it — the answer it asks for appears on the list behind, and a menu left open
+    /// over it would hide the one thing the user pressed it to see. The log switch does not: its
+    /// label *is* the feedback, and it is on this screen.
+    pub(crate) fn menu_run(&mut self) -> bool {
+        match menu_decl::entries().get(self.menu_selected).copied() {
+            Some(menu_decl::Action::Refresh) => {
+                self.refresh_dialogs();
+                true
+            }
+            Some(menu_decl::Action::DebugLog) => {
+                self.debug_log = !self.debug_log;
+                symbian::log::set_enabled(self.debug_log);
+                symbian::log!("[act] debug log set on={}", self.debug_log);
+                false
+            }
+            // An index with no entry under it: nothing to do, and closing would look like the
+            // entry had done something.
+            None => false,
+        }
+    }
+
     /// Which screen is showing, for tests and for the shim's title handling.
     pub fn in_conversation(&self) -> Option<usize> {
         match &self.screen {
@@ -1340,13 +1400,6 @@ impl App {
     /// `Ignored` for events nobody claimed lets the toolkit handle its own.
     pub(crate) fn handle_raw(&mut self, ev: &symbian_ui::RawEvent) -> Handled {
         let now = symbian::unix_time();
-
-        // The dev bridge runs on its own sockets, independent of the driver's, and
-        // does nothing at all in a build without the `dev-bridge` feature.
-        if symbian_app::devbridge::on_event(ev) {
-            self.should_exit = true;
-            return Handled::Consumed;
-        }
 
         // Before the driver, which knows about sockets and nothing about codecs. Matched
         // on the handle rather than the kind alone, so a completion from a decode this
@@ -1448,10 +1501,6 @@ still active={} mode={} flags={} done={} error={}",
                 // drawn, because drawing must not start a round trip.
                 d.request_dialogs(now, 0, 0, None);
                 self.dialogs_from_top = true;
-                if !symbian_app::devbridge::is_connected() {
-                    let h = self.driver.as_ref().and_then(|d| d.link_bearer_handle());
-                    symbian_app::devbridge::connect(h);
-                }
                 Handled::Consumed
             }
             driver::Outcome::Answered(tag, body) => {
@@ -1776,7 +1825,7 @@ mod tests {
                 length: Some(5),
                 error: None,
             };
-            let app = App { driver: None, store: Store::mock(), login, screen: super::Screen::Login, should_exit: false, chats_selected: 0, opening_chat: None, dialogs_from_top: true, pending: None, decoding: None, decode_src: "", decode_watchdog: None };
+            let app = App { driver: None, store: Store::mock(), login, screen: super::Screen::Login, should_exit: false, chats_selected: 0, menu_selected: 0, debug_log: true, opening_chat: None, dialogs_from_top: true, pending: None, decoding: None, decode_src: "", decode_watchdog: None };
             let mut app = mvu::Shell::new(app);
             let mut c = Canvas::from_slice(&mut buf, SCREEN);
             app.draw(&mut c, &t);
@@ -1795,7 +1844,7 @@ mod tests {
                 hint: String::new(),
                 error: None,
             };
-            let app = App { driver: None, store: Store::mock(), login, screen: super::Screen::Login, should_exit: false, chats_selected: 0, opening_chat: None, dialogs_from_top: true, pending: None, decoding: None, decode_src: "", decode_watchdog: None };
+            let app = App { driver: None, store: Store::mock(), login, screen: super::Screen::Login, should_exit: false, chats_selected: 0, menu_selected: 0, debug_log: true, opening_chat: None, dialogs_from_top: true, pending: None, decoding: None, decode_src: "", decode_watchdog: None };
             let mut app = mvu::Shell::new(app);
             let mut c = Canvas::from_slice(&mut buf, SCREEN);
             app.draw(&mut c, &t);

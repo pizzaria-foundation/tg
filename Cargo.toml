@@ -65,11 +65,6 @@ crate-type = ["rlib"]
 [features]
 default = []
 std = ["symbian-ui/std"]
-# The dev bridge, off by default: a signed release build must not ship a service
-# that accepts file writes from anything on the LAN. `tools/symbuild` turns it on
-# when EPOCADB_HOST is set in api.conf. The bridge itself lives in the SDK
-# (`symbian_app::devbridge`); this only forwards the switch.
-dev-bridge = ["symbian-app/dev-bridge"]
 
 # Host-only: the simulator and the contact sheets. Neither reaches the device build, which
 # is the point of them living here rather than under [dependencies].

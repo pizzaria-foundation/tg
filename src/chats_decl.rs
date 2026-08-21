@@ -51,8 +51,11 @@ use crate::model::{Chat, Store};
 /// cannot drift apart. See `symbian-decl-ui`'s `keys` module for why that matters.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Msg {
-    /// Ask the server for the dialog list again.
+    /// Ask the server for the dialog list again. Reached through the Options menu now, not from a
+    /// softkey of its own — see [`crate::menu_decl`].
     Refresh,
+    /// Open the Options menu.
+    Options,
     /// Open the highlighted chat.
     Open,
     /// Leave the application.
@@ -140,9 +143,8 @@ pub fn view(
     out: &Outbox<Msg>,
     slots: &mut SlotTable,
 ) -> Node {
-    // "Atualizar" becomes "..." while a request is in flight — the same signal the hand-written
-    // screen gives, and the only feedback there is, since there is no push subscription behind
-    // this list and no other way to tell that anything is happening.
+    // The subtitle carries the loading state, the same signal the hand-written screen gives: there
+    // is no push subscription behind this list and no other way to tell that anything is happening.
     let subtitle = if loading { "carregando…" } else { status };
 
     // `Screen::content` takes one widget, so the two states are built as two whole screens rather
@@ -303,8 +305,9 @@ fn metrics() -> Metrics {
     Metrics::default()
 }
 
-/// The row's inset — `theme.metrics.pad`.
-fn pad() -> i32 {
+/// The row's inset — `theme.metrics.pad`. Shared with `menu_decl`, whose rows sit in front of this
+/// list and would read as a different application if they were inset differently.
+pub(crate) fn pad() -> i32 {
     metrics().pad
 }
 
@@ -321,9 +324,13 @@ pub fn row_height() -> i32 {
 /// as `ChatList::activate` does nothing. A bar that dropped the label would be a nicer screen and a
 /// failed comparison.
 pub fn softkeys(loading: bool) -> Softkeys<Msg> {
-    // "..." while a request is in flight, which is the only feedback this screen has.
-    let refresh = if loading { "..." } else { "Atualizar" };
-    Softkeys::new().options(refresh, Msg::Refresh).action("Abrir", Msg::Open).back("Sair", Msg::Quit)
+    // "Opções" rather than "Atualizar": one slot cannot be spent on one verb once there is a second
+    // thing to offer, and refreshing is the menu's first entry — see `crate::menu_decl`.
+    //
+    // "..." while a request is in flight stays, because it is still the only feedback this screen
+    // has that anything is happening. The label under it is the menu's, not the refresh's.
+    let left = if loading { "..." } else { "Opções" };
+    Softkeys::new().options(left, Msg::Options).action("Abrir", Msg::Open).back("Sair", Msg::Quit)
 }
 
 /// What a key means on this screen, before any widget sees it.
@@ -461,9 +468,9 @@ mod tests {
 
     #[test]
     fn the_softkeys_mean_what_the_hand_written_screen_means() {
-        assert_eq!(on_key(false, press(Key::Softkey(Softkey::Left))), Some(Msg::Refresh));
+        assert_eq!(on_key(false, press(Key::Softkey(Softkey::Left))), Some(Msg::Options));
         assert_eq!(on_key(false, press(Key::Softkey(Softkey::Right))), Some(Msg::Quit));
-        assert_eq!(softkeys(false).labels(), [Some("Atualizar"), Some("Abrir"), Some("Sair")]);
+        assert_eq!(softkeys(false).labels(), [Some("Opções"), Some("Abrir"), Some("Sair")]);
         // Mid-request, the left label is the only progress this screen shows.
         assert_eq!(softkeys(true).labels(), [Some("..."), Some("Abrir"), Some("Sair")]);
     }

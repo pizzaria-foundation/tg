@@ -274,6 +274,19 @@ mod tests {
             Ok(self.files[&key].len() as u64)
         }
 
+        /// This fake holds files and no directories, so listing with subdirectories is the
+        /// same answer as listing without them.
+        fn list_entries(&mut self, path: &[u16], out: &mut [u16]) -> symbian::Result<usize> {
+            self.list_dir(path, out)
+        }
+
+        /// Only the size is real; the timestamp is not, because nothing here reads it and a
+        /// made-up date that looked plausible would be worse than an obvious zero.
+        fn stat(&mut self, path: &[u16]) -> symbian::Result<symbian::fs::Stat> {
+            let data = self.files.get(path).ok_or(symbian::Error::NotFound)?;
+            Ok(symbian::fs::Stat { size: data.len() as u64, ..Default::default() })
+        }
+
         // A flat map has no directories, so making one is nothing to do and never fails —
         // which matches the device, where the private path already exists.
         fn mkdir(&mut self, _path: &[u16]) -> symbian::Result<()> {
