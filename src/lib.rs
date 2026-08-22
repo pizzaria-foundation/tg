@@ -135,6 +135,12 @@ pub struct App {
     /// Which Options entry is highlighted. Kept across openings, so a menu used twice in a row does
     /// not start over.
     pub(crate) menu_selected: usize,
+    /// The phone-in-use signal, from the keypad lock the home screen publishes.
+    ///
+    /// A pocket is not a reason to keep a session to Telegram alive, and holding a socket keeps the
+    /// *interface* up — so an app that only stopped retrying would defeat `connd`'s parking for
+    /// everything else on the phone. See `driver::Driver::park`.
+    use_watch: symbian::device::UseWatch,
     /// Whether the device log is being written — the run-time half of `DEBUG=` in `app.conf`.
     ///
     /// Read once at startup from `symbian::log::enabled()`: the flag lives in a file, and reading it
@@ -220,6 +226,7 @@ impl App {
             should_exit: false,
             chats_selected: 0,
             menu_selected: 0,
+            use_watch: symbian::device::UseWatch::start(),
             debug_log: symbian::log::enabled(),
             opening_chat: None,
             dialogs_from_top: true,
@@ -280,6 +287,7 @@ impl App {
             should_exit: false,
             chats_selected: 0,
             menu_selected: 0,
+            use_watch: symbian::device::UseWatch::start(),
             debug_log: symbian::log::enabled(),
             opening_chat: None,
             dialogs_from_top: true,
@@ -300,6 +308,7 @@ impl App {
             should_exit: false,
             chats_selected: 0,
             menu_selected: 0,
+            use_watch: symbian::device::UseWatch::start(),
             debug_log: symbian::log::enabled(),
             opening_chat: None,
             dialogs_from_top: true,
@@ -1401,6 +1410,32 @@ impl App {
     pub(crate) fn handle_raw(&mut self, ev: &symbian_ui::RawEvent) -> Handled {
         let now = symbian::unix_time();
 
+        // The phone going into a pocket, or coming back out of one. Before anything else, because
+        // what it decides is whether the driver below should be doing *anything*.
+        match self.use_watch.on_event(ev) {
+            Some(false) => {
+                if let Some(d) = self.driver.as_mut() {
+                    let out = d.park();
+                    self.store.status = alloc::string::String::from(d.status);
+                    if !matches!(out, driver::Outcome::None) {
+                        return Handled::Consumed;
+                    }
+                }
+                return Handled::Ignored;
+            }
+            Some(true) => {
+                if let Some(d) = self.driver.as_mut() {
+                    let out = d.resume();
+                    self.store.status = alloc::string::String::from(d.status);
+                    if !matches!(out, driver::Outcome::None) {
+                        return Handled::Consumed;
+                    }
+                }
+                return Handled::Ignored;
+            }
+            None => {}
+        }
+
         // Before the driver, which knows about sockets and nothing about codecs. Matched
         // on the handle rather than the kind alone, so a completion from a decode this
         // app already abandoned is discarded instead of opening a viewer over whatever
@@ -1825,7 +1860,7 @@ mod tests {
                 length: Some(5),
                 error: None,
             };
-            let app = App { driver: None, store: Store::mock(), login, screen: super::Screen::Login, should_exit: false, chats_selected: 0, menu_selected: 0, debug_log: true, opening_chat: None, dialogs_from_top: true, pending: None, decoding: None, decode_src: "", decode_watchdog: None };
+            let app = App { driver: None, store: Store::mock(), login, screen: super::Screen::Login, should_exit: false, chats_selected: 0, menu_selected: 0, use_watch: symbian::device::UseWatch::start(), debug_log: true, opening_chat: None, dialogs_from_top: true, pending: None, decoding: None, decode_src: "", decode_watchdog: None };
             let mut app = mvu::Shell::new(app);
             let mut c = Canvas::from_slice(&mut buf, SCREEN);
             app.draw(&mut c, &t);
@@ -1844,7 +1879,7 @@ mod tests {
                 hint: String::new(),
                 error: None,
             };
-            let app = App { driver: None, store: Store::mock(), login, screen: super::Screen::Login, should_exit: false, chats_selected: 0, menu_selected: 0, debug_log: true, opening_chat: None, dialogs_from_top: true, pending: None, decoding: None, decode_src: "", decode_watchdog: None };
+            let app = App { driver: None, store: Store::mock(), login, screen: super::Screen::Login, should_exit: false, chats_selected: 0, menu_selected: 0, use_watch: symbian::device::UseWatch::start(), debug_log: true, opening_chat: None, dialogs_from_top: true, pending: None, decoding: None, decode_src: "", decode_watchdog: None };
             let mut app = mvu::Shell::new(app);
             let mut c = Canvas::from_slice(&mut buf, SCREEN);
             app.draw(&mut c, &t);

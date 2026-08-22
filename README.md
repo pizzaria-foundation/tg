@@ -29,6 +29,17 @@ habit of left-then-middle still refreshes the list — and the device log's run-
 label reads `Log: ligado` or `Log: desligado` so a toggle nobody can see is not something you have to
 guess at. `DEBUG=` in `app.conf` still decides whether the log is compiled in at all.
 
+**It stops when the phone goes into a pocket.** The home screen publishes the keypad lock
+(`symbian::device::LOCK_KEY`) and this client watches it: locking drops the link and cancels every
+timer that would rebuild it, unlocking connects again with the retry budget cleared — a pocket is not
+one of the three strikes. The status line says `pausado` so the screen can explain itself.
+
+The link goes and not just the retries, and the reason is other applications: `connd` releases the
+WLAN a minute after the lock, but releasing is `RConnection::Close`, which drops *that* daemon's
+reference — the interface stays up while anything else holds a socket. A client that only stopped
+retrying would keep the radio associated for as long as the phone sat in a pocket and quietly defeat
+the parking for everything else on the handset.
+
 That is a 320x240 screen with no touch input: every one of those is driven by the D-pad,
 the two softkeys and the QWERTY. The rasterizer, the fonts and the layout are all the
 SDK's - see [symbian-gfx and symbian-ui](https://github.com/pizzaria-foundation/epoc) - and none of it

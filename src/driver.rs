@@ -186,6 +186,8 @@ pub struct Driver {
     /// The one-shot timer that gets connecting off the start-up path, and `None` once it
     /// has fired. See `App::login`.
     connect_timer: Option<i32>,
+    /// Set while the phone is locked: no link, no timers, and nothing rebuilt until it is released.
+    parked: bool,
     /// A timer that fires after a disconnect, so the link can be rebuilt without the user
     /// having to restart the application.
     reconnect_timer: Option<i32>,
@@ -221,6 +223,7 @@ impl Driver {
             pending_call: Vec::new(),
             persisted: false,
             connect_timer: None,
+            parked: false,
             reconnect_timer: None,
             stuck_timer: None,
             retries: 0,
@@ -474,6 +477,59 @@ impl Driver {
             // try — the screen at least exists.
             Err(_) => Outcome::Redraw,
         }
+    }
+
+    /// Stop working: the phone went into a pocket.
+    ///
+    /// Drops the link and cancels every timer that would rebuild it. Not a disconnection the user
+    /// caused, so the login state and the pending call survive exactly as they do across an ordinary
+    /// drop — [`Self::resume`] picks up from here.
+    ///
+    /// # Why the link goes and not just the retries
+    ///
+    /// Because a socket keeps the interface up. `connd` releases the WLAN a minute after the lock,
+    /// but releasing is `RConnection::Close` — it drops *that* daemon's reference, and the interface
+    /// stays up while anything else holds one. An application that only stopped *retrying* would keep
+    /// the radio associated for the whole time the phone sat in a pocket and quietly defeat the
+    /// parking of every other app on the phone.
+    pub fn park(&mut self) -> Outcome {
+        if self.parked {
+            return Outcome::None;
+        }
+        self.parked = true;
+        for t in [self.connect_timer.take(), self.reconnect_timer.take()] {
+            if let Some(h) = t {
+                symbian::timer_cancel(h);
+            }
+        }
+        if let Some((h, _)) = self.stuck_timer.take() {
+            symbian::timer_cancel(h);
+        }
+        let had = self.link.is_some();
+        self.link = None;
+        self.status = "pausado";
+        symbian::log!("[net] parked (keypad locked); link_was={had}");
+        Outcome::Redraw
+    }
+
+    /// The phone is back in a hand: connect now.
+    ///
+    /// Straight to [`Self::connect`] rather than through the reconnect timer, and the retry counter
+    /// is cleared — the three-strike limit is there for a server that will not answer, and coming out
+    /// of a pocket is not a strike.
+    pub fn resume(&mut self) -> Outcome {
+        if !self.parked {
+            return Outcome::None;
+        }
+        self.parked = false;
+        self.retries = 0;
+        symbian::log!("[net] resuming (keypad unlocked)");
+        self.connect()
+    }
+
+    /// Whether the driver is parked. The screens read it to explain themselves.
+    pub fn parked(&self) -> bool {
+        self.parked
     }
 
     pub fn connect(&mut self) -> Outcome {
@@ -1045,6 +1101,26 @@ mod tests {
             Outcome::Disconnected("sem conexão")
         );
         assert!(!d.is_connected());
+    }
+
+    /// Parking is idempotent, clears the retry budget on the way back, and says so in the status —
+    /// which is the only thing on screen that can explain why nothing is happening.
+    #[test]
+    fn parking_is_idempotent_and_resuming_clears_the_retries() {
+        let mut d = Driver::new();
+        assert!(!d.parked());
+
+        assert_eq!(d.park(), Outcome::Redraw);
+        assert!(d.parked());
+        assert_eq!(d.status, "pausado", "the screen has to be able to say why");
+        assert_eq!(d.park(), Outcome::None, "already parked is not an event");
+
+        // A pocket is not one of the three strikes: those are for a server that will not answer.
+        d.retries = 2;
+        d.resume();
+        assert!(!d.parked());
+        assert_eq!(d.retries, 0);
+        assert_eq!(d.resume(), Outcome::None, "already running is not an event either");
     }
 
     fn a_request() -> FileRequest {
