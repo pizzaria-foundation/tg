@@ -161,6 +161,31 @@ struct FileDc {
     waiting: Option<FileRequest>,
 }
 
+/// Where the application is, as far as anything that costs radio is concerned.
+///
+/// This used to be a single `parked: bool` fed only by the keypad lock, which conflated two
+/// states that want opposite treatment. A phone in a pocket wants the interface released; an
+/// application merely covered by another one wants the socket it already has left alone.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Activity {
+    /// On screen and in a hand. Everything is allowed, including rebuilding a lost link.
+    Foreground,
+    /// Another application is on top. The link that exists is kept — an established socket
+    /// costs nothing to hold and messages keep arriving on it — but nothing is *rebuilt*.
+    /// Losing Wi-Fi behind someone else's screen is the phone's state to respect, not a
+    /// problem to solve by re-associating the radio under them.
+    Background,
+    /// Keypad locked: the phone is in a pocket. The link goes, so the interface can go too.
+    Pocket,
+}
+
+impl Activity {
+    /// Whether a link may be built or rebuilt from scratch.
+    fn may_connect(self) -> bool {
+        matches!(self, Activity::Foreground)
+    }
+}
+
 pub struct Driver {
     link: Option<Link>,
     /// A connection to a non-home data centre, built the first time a file needs one and
@@ -186,8 +211,8 @@ pub struct Driver {
     /// The one-shot timer that gets connecting off the start-up path, and `None` once it
     /// has fired. See `App::login`.
     connect_timer: Option<i32>,
-    /// Set while the phone is locked: no link, no timers, and nothing rebuilt until it is released.
-    parked: bool,
+    /// Where the application is. Anything that would build a link asks this first.
+    activity: Activity,
     /// A timer that fires after a disconnect, so the link can be rebuilt without the user
     /// having to restart the application.
     reconnect_timer: Option<i32>,
@@ -223,7 +248,7 @@ impl Driver {
             pending_call: Vec::new(),
             persisted: false,
             connect_timer: None,
-            parked: false,
+            activity: Activity::Foreground,
             reconnect_timer: None,
             stuck_timer: None,
             retries: 0,
@@ -479,57 +504,99 @@ impl Driver {
         }
     }
 
-    /// Stop working: the phone went into a pocket.
+    /// Say where the application is. Everything that costs radio hangs off this.
     ///
-    /// Drops the link and cancels every timer that would rebuild it. Not a disconnection the user
-    /// caused, so the login state and the pending call survive exactly as they do across an ordinary
-    /// drop — [`Self::resume`] picks up from here.
+    /// Idempotent: being told the same state twice is not an event, so a window server that
+    /// repeats a focus change does not produce a reconnect.
     ///
-    /// # Why the link goes and not just the retries
+    /// # Why the link goes in a pocket and only the timers go in the background
     ///
-    /// Because a socket keeps the interface up. `connd` releases the WLAN a minute after the lock,
-    /// but releasing is `RConnection::Close` — it drops *that* daemon's reference, and the interface
-    /// stays up while anything else holds one. An application that only stopped *retrying* would keep
-    /// the radio associated for the whole time the phone sat in a pocket and quietly defeat the
-    /// parking of every other app on the phone.
-    pub fn park(&mut self) -> Outcome {
-        if self.parked {
+    /// A socket keeps the interface up. `connd` releases the WLAN a minute after the lock, but
+    /// releasing is `RConnection::Close` — it drops *that* daemon's reference, and the interface
+    /// stays up while anything else holds one. An application that only stopped *retrying* would
+    /// keep the radio associated for the whole time the phone sat in a pocket and quietly defeat
+    /// the parking of every other app on the phone.
+    ///
+    /// Merely being covered by another application is not that. Nobody has put the phone away, the
+    /// radio is up for whoever is on top, and a session already established is the cheapest way to
+    /// still have messages when the user comes back. So the link stays; what stops is rebuilding it.
+    pub fn set_activity(&mut self, next: Activity) -> Outcome {
+        if next == self.activity {
             return Outcome::None;
         }
-        self.parked = true;
+        let was = self.activity;
+        self.activity = next;
+        symbian::log!("[net] activity {was:?} -> {next:?}");
+
+        match next {
+            // Into a pocket: drop everything. The login state and the pending call survive
+            // exactly as they do across an ordinary disconnection.
+            Activity::Pocket => {
+                self.cancel_link_timers();
+                if let Some((h, _)) = self.stuck_timer.take() {
+                    symbian::timer_cancel(h);
+                }
+                let had = self.link.is_some();
+                self.link = None;
+                self.status = "pausado";
+                symbian::log!("[net] parked (keypad locked); link_was={had}");
+                Outcome::Redraw
+            }
+            // Behind another application: stop rebuilding, keep what is already up. The stuck
+            // watchdog stays armed — it belongs to a request that really is in flight.
+            Activity::Background => {
+                self.cancel_link_timers();
+                if self.link.is_none() {
+                    self.status = "em segundo plano";
+                }
+                Outcome::Redraw
+            }
+            // Back on screen. The retry counter is cleared: the three-strike limit is there for a
+            // server that will not answer, and coming back from a pocket is not a strike.
+            Activity::Foreground => {
+                self.retries = 0;
+                if self.link.is_some() {
+                    // Survived the background with its session intact; nothing to rebuild.
+                    return Outcome::Redraw;
+                }
+                symbian::log!("[net] resuming from {was:?}");
+                self.connect()
+            }
+        }
+    }
+
+    /// The timers that exist only to build a link. Cancelled whenever building one stops being
+    /// allowed, so nothing fires into a state that would refuse it anyway.
+    fn cancel_link_timers(&mut self) {
         for t in [self.connect_timer.take(), self.reconnect_timer.take()] {
             if let Some(h) = t {
                 symbian::timer_cancel(h);
             }
         }
-        if let Some((h, _)) = self.stuck_timer.take() {
-            symbian::timer_cancel(h);
-        }
-        let had = self.link.is_some();
-        self.link = None;
-        self.status = "pausado";
-        symbian::log!("[net] parked (keypad locked); link_was={had}");
-        Outcome::Redraw
     }
 
-    /// The phone is back in a hand: connect now.
+    /// Whether a *lost* link may be rebuilt right now.
     ///
-    /// Straight to [`Self::connect`] rather than through the reconnect timer, and the retry counter
-    /// is cleared — the three-strike limit is there for a server that will not answer, and coming out
-    /// of a pocket is not a strike.
-    pub fn resume(&mut self) -> Outcome {
-        if !self.parked {
-            return Outcome::None;
-        }
-        self.parked = false;
-        self.retries = 0;
-        symbian::log!("[net] resuming (keypad unlocked)");
-        self.connect()
+    /// Distinct from [`Activity::may_connect`]: that one is about the state alone, this one is the
+    /// whole policy the disconnection paths consult, and it is the single place where "only in the
+    /// foreground" is either enforced or relaxed.
+    fn may_rebuild_link(&self) -> bool {
+        // Strict, deliberately. A looser rule — one free retry in the background while the Wi-Fi
+        // is still up — buys a few more messages behind someone else's screen and costs the one
+        // property this whole change exists for: that an interface the user brought down stays
+        // down. The link that survives into the background is kept; a link that dies there waits
+        // for the user to come back.
+        self.activity.may_connect()
     }
 
-    /// Whether the driver is parked. The screens read it to explain themselves.
+    /// Where the application is, as last told. The screens read it to explain themselves.
+    pub fn activity(&self) -> Activity {
+        self.activity
+    }
+
+    /// Whether the driver is holding still. The screens read it to explain themselves.
     pub fn parked(&self) -> bool {
-        self.parked
+        !self.activity.may_connect()
     }
 
     pub fn connect(&mut self) -> Outcome {
@@ -671,6 +738,18 @@ impl Driver {
             return self.connect();
         }
 
+        // A reconnect timer that was armed in the foreground and fired after the user walked
+        // away. Cancelling on the transition covers the ordinary case; this covers the race
+        // where it had already fired into the queue.
+        if ev.kind == sys::SHIM_EV_TIMER
+            && Some(ev.handle) == self.reconnect_timer
+            && !self.may_rebuild_link()
+        {
+            self.reconnect_timer = None;
+            symbian::log!("[net] reconnect dropped: {:?}", self.activity);
+            return Outcome::None;
+        }
+
         // A reconnect after a disconnection. The pending call and the login state survive,
         // so the user can continue where they left off without restarting the application.
         if ev.kind == sys::SHIM_EV_TIMER && Some(ev.handle) == self.reconnect_timer {
@@ -709,6 +788,10 @@ impl Driver {
             // Bounded, like the reconnect path. Without this a server that stays silent is
             // an endless reconnect every ten seconds, with a status line that keeps
             // promising something is happening.
+            if !self.may_rebuild_link() {
+                symbian::log!("[rpc] stuck, and not rebuilding from {:?}", self.activity);
+                return Outcome::Disconnected("sem conexão");
+            }
             if self.retries >= 3 {
                 symbian::log!("[rpc] giving up after three stuck calls");
                 return Outcome::Disconnected("o servidor não respondeu");
@@ -887,7 +970,7 @@ impl Driver {
                 if let Some((h, _)) = self.stuck_timer.take() {
                     symbian::timer_cancel(h);
                 }
-                if self.retries < 3 {
+                if self.may_rebuild_link() && self.retries < 3 {
                     if let Ok(h) = symbian::timer_after(2000) {
                         self.reconnect_timer = Some(h);
                         self.status = "reconectando";
@@ -1110,17 +1193,39 @@ mod tests {
         let mut d = Driver::new();
         assert!(!d.parked());
 
-        assert_eq!(d.park(), Outcome::Redraw);
+        assert_eq!(d.set_activity(Activity::Pocket), Outcome::Redraw);
         assert!(d.parked());
         assert_eq!(d.status, "pausado", "the screen has to be able to say why");
-        assert_eq!(d.park(), Outcome::None, "already parked is not an event");
+        assert_eq!(
+            d.set_activity(Activity::Pocket),
+            Outcome::None,
+            "already parked is not an event"
+        );
 
         // A pocket is not one of the three strikes: those are for a server that will not answer.
         d.retries = 2;
-        d.resume();
+        d.set_activity(Activity::Foreground);
         assert!(!d.parked());
         assert_eq!(d.retries, 0);
-        assert_eq!(d.resume(), Outcome::None, "already running is not an event either");
+        assert_eq!(
+            d.set_activity(Activity::Foreground),
+            Outcome::None,
+            "already running is not an event either"
+        );
+    }
+
+    #[test]
+    fn the_background_stops_rebuilding_without_dropping_what_is_up() {
+        let mut d = Driver::new();
+        // Nothing to hold on to here — the point is that the state itself refuses a rebuild,
+        // which is what the disconnection paths consult.
+        assert!(d.may_rebuild_link(), "the foreground rebuilds");
+        d.set_activity(Activity::Background);
+        assert!(!d.may_rebuild_link(), "another app is on top: respect the phone's network state");
+        d.set_activity(Activity::Pocket);
+        assert!(!d.may_rebuild_link(), "and a pocket most of all");
+        d.set_activity(Activity::Foreground);
+        assert!(d.may_rebuild_link(), "back on screen, back to work");
     }
 
     fn a_request() -> FileRequest {

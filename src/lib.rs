@@ -141,6 +141,11 @@ pub struct App {
     /// *interface* up — so an app that only stopped retrying would defeat `connd`'s parking for
     /// everything else on the phone. See `driver::Driver::park`.
     use_watch: symbian::device::UseWatch,
+    /// Last reading of the keypad lock, inverted: `true` means the phone is put away.
+    pocket: bool,
+    /// Whether our window is the one on screen. Starts `true` — an application only ever runs
+    /// its first frame because something brought it to the front.
+    foreground: bool,
     /// Whether the device log is being written — the run-time half of `DEBUG=` in `app.conf`.
     ///
     /// Read once at startup from `symbian::log::enabled()`: the flag lives in a file, and reading it
@@ -226,7 +231,7 @@ impl App {
             should_exit: false,
             chats_selected: 0,
             menu_selected: 0,
-            use_watch: symbian::device::UseWatch::start(),
+            use_watch: symbian::device::UseWatch::start(), pocket: false, foreground: true,
             debug_log: symbian::log::enabled(),
             opening_chat: None,
             dialogs_from_top: true,
@@ -287,7 +292,7 @@ impl App {
             should_exit: false,
             chats_selected: 0,
             menu_selected: 0,
-            use_watch: symbian::device::UseWatch::start(),
+            use_watch: symbian::device::UseWatch::start(), pocket: false, foreground: true,
             debug_log: symbian::log::enabled(),
             opening_chat: None,
             dialogs_from_top: true,
@@ -308,7 +313,7 @@ impl App {
             should_exit: false,
             chats_selected: 0,
             menu_selected: 0,
-            use_watch: symbian::device::UseWatch::start(),
+            use_watch: symbian::device::UseWatch::start(), pocket: false, foreground: true,
             debug_log: symbian::log::enabled(),
             opening_chat: None,
             dialogs_from_top: true,
@@ -1293,7 +1298,16 @@ impl App {
         let launched = if rang { None } else { Some(symbian::apps::launch(symbian::intent::LAUNCHER_UID)) };
 
         match link_plan(rang, launched.as_ref().map(|r| r.as_ref().err().copied())) {
-            LinkPlan::LauncherWillHandleIt => alloc::format!("abrindo {url}"),
+            LinkPlan::LauncherWillHandleIt => {
+                // Off the screen, now that someone else owns the question. The launcher is woken by
+                // a property and a property raises no window group, so whatever it asks — which
+                // handler, whether to connect — is drawn behind this application and reads as a
+                // link that did nothing. `intent::yield_screen` is the same step aside
+                // `apps::open_at` takes on the browser path, and the same one `shim_net.cpp` takes
+                // before the access-point dialog.
+                symbian::intent::yield_screen();
+                alloc::format!("abrindo {url}")
+            }
             LinkPlan::FallBackToBrowser => {
                 // Take the request back off the disk first: nobody will ever read it, and one left
                 // behind is a link from today opening by itself on some future first run.
@@ -1410,30 +1424,39 @@ impl App {
     pub(crate) fn handle_raw(&mut self, ev: &symbian_ui::RawEvent) -> Handled {
         let now = symbian::unix_time();
 
-        // The phone going into a pocket, or coming back out of one. Before anything else, because
-        // what it decides is whether the driver below should be doing *anything*.
-        match self.use_watch.on_event(ev) {
-            Some(false) => {
-                if let Some(d) = self.driver.as_mut() {
-                    let out = d.park();
-                    self.store.status = alloc::string::String::from(d.status);
-                    if !matches!(out, driver::Outcome::None) {
-                        return Handled::Consumed;
-                    }
-                }
-                return Handled::Ignored;
+        // Where the phone is, and where we are on it. Before anything else, because between them
+        // they decide whether the driver below should be doing *anything*.
+        //
+        // Two independent facts, and they are not the same one. The keypad lock says the phone is
+        // in a pocket; the focus event says another application is on top. Telegram used to hear
+        // only the first, so walking away from it without locking the keypad left it reconnecting
+        // behind someone else's screen — chasing a Wi-Fi the user had turned off on purpose.
+        let pocket = self.use_watch.on_event(ev).map(|in_use| !in_use);
+        let foreground = (ev.kind == symbian_sys::SHIM_EV_FOCUS).then(|| ev.a != 0);
+        if pocket.is_some() || foreground.is_some() {
+            if let Some(p) = pocket {
+                self.pocket = p;
             }
-            Some(true) => {
-                if let Some(d) = self.driver.as_mut() {
-                    let out = d.resume();
-                    self.store.status = alloc::string::String::from(d.status);
-                    if !matches!(out, driver::Outcome::None) {
-                        return Handled::Consumed;
-                    }
-                }
-                return Handled::Ignored;
+            if let Some(f) = foreground {
+                self.foreground = f;
             }
-            None => {}
+            // The pocket wins: a locked keypad is a locked keypad whether or not our window
+            // still holds the focus behind the lock screen.
+            let next = if self.pocket {
+                driver::Activity::Pocket
+            } else if self.foreground {
+                driver::Activity::Foreground
+            } else {
+                driver::Activity::Background
+            };
+            if let Some(d) = self.driver.as_mut() {
+                let out = d.set_activity(next);
+                self.store.status = alloc::string::String::from(d.status);
+                if !matches!(out, driver::Outcome::None) {
+                    return Handled::Consumed;
+                }
+            }
+            return Handled::Ignored;
         }
 
         // Before the driver, which knows about sockets and nothing about codecs. Matched
@@ -1860,7 +1883,7 @@ mod tests {
                 length: Some(5),
                 error: None,
             };
-            let app = App { driver: None, store: Store::mock(), login, screen: super::Screen::Login, should_exit: false, chats_selected: 0, menu_selected: 0, use_watch: symbian::device::UseWatch::start(), debug_log: true, opening_chat: None, dialogs_from_top: true, pending: None, decoding: None, decode_src: "", decode_watchdog: None };
+            let app = App { driver: None, store: Store::mock(), login, screen: super::Screen::Login, should_exit: false, chats_selected: 0, menu_selected: 0, use_watch: symbian::device::UseWatch::start(), pocket: false, foreground: true, debug_log: true, opening_chat: None, dialogs_from_top: true, pending: None, decoding: None, decode_src: "", decode_watchdog: None };
             let mut app = mvu::Shell::new(app);
             let mut c = Canvas::from_slice(&mut buf, SCREEN);
             app.draw(&mut c, &t);
@@ -1879,7 +1902,7 @@ mod tests {
                 hint: String::new(),
                 error: None,
             };
-            let app = App { driver: None, store: Store::mock(), login, screen: super::Screen::Login, should_exit: false, chats_selected: 0, menu_selected: 0, use_watch: symbian::device::UseWatch::start(), debug_log: true, opening_chat: None, dialogs_from_top: true, pending: None, decoding: None, decode_src: "", decode_watchdog: None };
+            let app = App { driver: None, store: Store::mock(), login, screen: super::Screen::Login, should_exit: false, chats_selected: 0, menu_selected: 0, use_watch: symbian::device::UseWatch::start(), pocket: false, foreground: true, debug_log: true, opening_chat: None, dialogs_from_top: true, pending: None, decoding: None, decode_src: "", decode_watchdog: None };
             let mut app = mvu::Shell::new(app);
             let mut c = Canvas::from_slice(&mut buf, SCREEN);
             app.draw(&mut c, &t);
