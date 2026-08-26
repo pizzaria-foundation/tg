@@ -1,6 +1,6 @@
 # tg - a Telegram client for Symbian
 
-Runs on a Nokia E72 from 2009. Written in Rust on the
+Runs on Symbian S60 3rd Edition. Written in Rust on the
 [epoc](https://github.com/pizzaria-foundation/epoc) SDK, which it depends on by revision.
 
 MTProto 2.0 is implemented here from the specification - the PQ factorisation, the
