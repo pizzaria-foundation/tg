@@ -2,13 +2,13 @@
 
 ## v0.2.0 — 2026-08-26
 
-Cliente de Telegram para o Nokia E72, falando MTProto direto.
+Telegram client for Symbian S60, speaking MTProto directly.
 
-- **Conversas, mensagens e contatos**, com a criptografia implementada aqui —
-  sem biblioteca de terceiros, porque não há nenhuma para esta plataforma.
-- **Registro como MTM**, então ele aparece na Caixa de entrada nativa do telefone.
-- **Segue o tema do telefone**.
+- **Chats, messages and contacts**, with the cryptography implemented here — there is
+  no third-party library for this platform.
+- **Registered as an MTM**, so it appears in the phone's native Inbox alongside SMS.
+- **Follows the phone's theme**.
 
-**Instalação:** baixe `telegram.sis` e abra no aparelho. Precisa de credenciais
-de aplicação do Telegram (`api.conf`) para conectar. Requer installserver
-liberado (Open4All / RomPatcher+).
+**Install:** download `telegram.sis` and open it on the device. Connecting needs
+Telegram application credentials in `api.conf`. Unsigned, so it needs an unlocked
+installserver (Open4All / RomPatcher+).
