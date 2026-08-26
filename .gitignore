@@ -35,3 +35,11 @@ preview-out/
 # build; the pictures are for looking at when it does, and a tree that goes dirty on every test
 # run trains everyone to ignore `git status`.
 parity-out/
+
+# Release packages. They live as GitHub release assets now, which is where `my-epoc` looks for
+# them — `symbian_bootcfg::github` reads /releases/latest and downloads `browser_download_url`.
+#
+# Kept out of git because a committed binary ages silently: this directory carried a package for
+# an application that had already moved to another repository, and nothing failed. A release asset
+# cannot drift like that, because the tag says which commit built it.
+dist/
