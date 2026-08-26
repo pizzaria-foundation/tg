@@ -41,4 +41,16 @@ static _CHATS_LINK: fn(&[u8]) -> Result<tg_proto::chats::Dialogs, tg_proto::walk
 /// Both are `mvu::Shell`: the client is model-update-view behind `symbian-decl-ui`'s bridge, and the
 /// shell is what keeps `handle_raw` — the driver's completions are not keys and are not the bridge's
 /// to route.
-symbian_app::entry!(tg::mvu::live(), work = worker);
+// See `map`'s copy of this for the argument. `Choice::Follow` is "no opinion of my own"; dark is
+// where it lands when nobody else has one either.
+symbian_app::entry!(
+    {
+        symbian_app::theme_pref::load_from_disk(
+            symbian_app::theme_pref::Choice::Follow,
+            symbian_app::symbian_ui::Palette::DARK,
+        );
+        tg::mvu::live()
+    },
+    palette = symbian_app::theme_pref::current(),
+    work = worker
+);

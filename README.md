@@ -123,7 +123,6 @@ with its own `target/`, and only ever builds for ARM.
             chats, conv         the conversation list and the transcript
             model, store_cache  the model, and the copy of it kept on disk
             session_store       the auth key, in the app's private cage
-            selfcheck           replays a recorded handshake on the handset
 
 
 ## What is real

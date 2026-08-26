@@ -67,6 +67,9 @@ fn render(dark: &symbian_ui::Theme<'_>, light: &symbian_ui::Theme<'_>) {
     shot("14-composing", dark, &keys);
 
     shot("15-cyrillic", dark, &[Key::Down, Key::Down, Key::Select]);
+    // The chat list's Options menu, opened with the left softkey. It had no sheet at all until
+    // now, which is how its rows drifted out of step with the list underneath them.
+    shot("17-menu", dark, &[Key::Softkey(Softkey::Left)]);
     shot("16-chats-light", light, &[]);
 
     // The link question, over a real transcript. Drawn here rather than reached through keys

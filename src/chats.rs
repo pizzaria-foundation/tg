@@ -60,7 +60,7 @@ impl ChatList {
         } else {
             let rows = Self::rows(store, theme);
             let bar = self.state.scrollbar(&rows, frame.content.height());
-            let gutter = chrome::scrollbar_gutter(theme, bar.is_some());
+            let gutter = chrome::scrollbar_gutter(theme);
             let body = Rect { x1: frame.content.x1 - gutter, ..frame.content };
 
             // `draw_visible` clips to the band, so a row straddling the top or bottom edge is

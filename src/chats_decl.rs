@@ -198,10 +198,12 @@ pub fn view(
 /// drift apart when the palette changes: name and time go to `text`/`dim` normally and both to
 /// `selection_text` under the highlight, which is what makes a selected row read as one block.
 fn chat_row(chat: &ChatRow, selected: bool) -> Node {
-    // Under the highlight every line goes to the selection colour, which is what makes a selected
-    // row read as one block rather than as a band with ordinary text on it.
-    let name_ink = if selected { Ink::Selection } else { Ink::Text };
-    let sub_ink = if selected { Ink::Selection } else { Ink::Dim };
+    // Plain roles, even under the highlight. `ScrollList` puts the selected row's subtree on
+    // `Ground::Band`, and `Ink::resolve` collapses `Text`, `Dim` and `Accent` to `selection_text`
+    // there — which is exactly the `if selected { Ink::Selection }` this row used to write out by
+    // hand, three times. The row still reads as one block; the theme is what says so now.
+    let name_ink = Ink::Text;
+    let sub_ink = Ink::Dim;
 
     // Two stacked lines, not two side-by-side columns.
     //
@@ -236,8 +238,7 @@ fn chat_row(chat: &ChatRow, selected: bool) -> Node {
     if chat.last_outgoing {
         // The tick is its own colour, so it is its own widget: concatenating it into the preview
         // string made it take the preview's ink.
-        let tick_ink = if selected { Ink::Selection } else { Ink::Accent };
-        bottom_line = bottom_line.child(Text::new("\u{2713} ").font(FontRole::Small).ink(tick_ink));
+        bottom_line = bottom_line.child(Text::new("\u{2713} ").font(FontRole::Small).ink(Ink::Accent));
     }
     bottom_line = bottom_line.child(preview_text);
     if let Some(badge) = Badge::count(chat.unread, selected) {

@@ -16,7 +16,6 @@ pub mod login;
 /// The login screens described declaratively, beside the hand-written ones. See the module header.
 pub mod login_decl;
 pub mod session_store;
-pub mod selfcheck;
 pub mod chats;
 /// The dialog list built declaratively, beside the hand-written one. See the module header.
 pub mod chats_decl;

@@ -624,7 +624,7 @@ impl Conversation {
         let t = self.transcript.as_ref().unwrap();
 
         let bar = self.state.scrollbar(t, area.height());
-        let gutter = chrome::scrollbar_gutter(theme, bar.is_some());
+        let gutter = chrome::scrollbar_gutter(theme);
         // A short conversation hangs from the composer rather than the title bar.
         // Every chat client does this, and the alternative — a wall of empty space
         // below two messages — reads as a rendering fault.
