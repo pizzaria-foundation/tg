@@ -145,7 +145,7 @@ pub fn view(
 ) -> Node {
     // The subtitle carries the loading state, the same signal the hand-written screen gives: there
     // is no push subscription behind this list and no other way to tell that anything is happening.
-    let subtitle = if loading { "carregando…" } else { status };
+    let subtitle = if loading { crate::strings::loading() } else { status };
 
     // `Screen::content` takes one widget, so the two states are built as two whole screens rather
     // than as one screen with a branch inside it. That reads oddly at first and is the honest
@@ -158,7 +158,7 @@ pub fn view(
         return Node::leaf(
             Screen::new()
                 .title_bar(bar)
-                .content(Text::new("Nenhuma conversa").ink(Ink::Dim).align(symbian_ui::Align::Center))
+                .content(Text::new(crate::strings::no_chats()).ink(Ink::Dim).align(symbian_ui::Align::Center))
                 .softkeys(softkeys(loading)),
         );
     }

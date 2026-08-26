@@ -100,7 +100,7 @@ impl Login {
             // Waiting screen shows connection progress ("conectando…", "computing the key")
             // and transitions to Phone once the link is ready — or directly to Chats if
             // the session was loaded from disk.
-            screen: Screen::Waiting("conectando…"),
+            screen: Screen::Waiting(crate::strings::connecting_ellipsis()),
             machine: auth::Login::new(api_id, api_hash),
             api_id,
             api_hash_empty: api_hash.is_empty(),
@@ -311,7 +311,7 @@ impl Login {
     /// Ask the server to send a code to `phone`.
     pub fn ask_send_code(&mut self, phone: &str) -> Progress {
         self.phone = String::from(phone);
-        self.screen = Screen::Waiting("sending the code");
+        self.screen = Screen::Waiting(crate::strings::sending_the_code());
         progress(self.machine.send_code(phone))
     }
 
@@ -325,19 +325,19 @@ impl Login {
 
     /// Ask for another code.
     pub fn ask_resend(&mut self) -> Progress {
-        self.screen = Screen::Waiting("resending the code");
+        self.screen = Screen::Waiting(crate::strings::resending_the_code());
         progress(self.machine.resend_code())
     }
 
     /// Submit the code the user typed.
     pub fn submit_code(&mut self, code: &str) -> Progress {
-        self.screen = Screen::Waiting("signing in");
+        self.screen = Screen::Waiting(crate::strings::signing_in());
         progress(self.machine.submit_code(code))
     }
 
     /// Submit the two-factor password.
     pub fn submit_password(&mut self, password: &[u8]) -> Progress {
-        self.screen = Screen::Waiting("checking the password");
+        self.screen = Screen::Waiting(crate::strings::checking_password());
         progress(self.machine.submit_password(password))
     }
 
@@ -449,7 +449,7 @@ impl Login {
         match &self.screen {
             Screen::Phone { ref field, ref error } => {
                 chrome::title_bar(
-                    c, frame.title, theme, "Telegram", Some("entrar"),
+                    c, frame.title, theme, "Telegram", Some(crate::strings::title_sign_in()),
                 );
                 // A build with no api_id reaches Telegram and is told API_ID_INVALID. Said
                 // here instead, before a number is typed and a round trip is spent, and
@@ -457,7 +457,7 @@ impl Login {
                 // error yet and inventing one would be a lie about what happened.
                 let missing = self.credentials_missing();
                 let line = if missing {
-                    Some("sem api_id: veja apps/telegram/api.conf.example")
+                    Some(crate::strings::no_api_id())
                 } else {
                     error.as_deref()
                 };
@@ -481,7 +481,7 @@ impl Login {
                 );
                 let hint = match length {
                     Some(n) => {
-                        let mut s = String::from("Digite os ");
+                        let mut s = String::from(crate::strings::enter_the());
                         s.push_str(&itoa(*n as u32));
                         s.push_str(crate::strings::digits_suffix());
                         s
@@ -509,12 +509,12 @@ impl Login {
             }
             Screen::Password { ref field, ref hint, ref error } => {
                 chrome::title_bar(
-                    c, frame.title, theme, "Telegram", Some("senha"),
+                    c, frame.title, theme, "Telegram", Some(crate::strings::password()),
                 );
                 let masked = field.borrow().is_masked();
                 let field_r = draw_field_centered(
-                    c, frame.content, theme, "Senha de dois fatores",
-                    None, Some("senha"), &field.borrow(), error.as_deref(),
+                    c, frame.content, theme, crate::strings::two_factor_password(),
+                    None, Some(crate::strings::password()), &field.borrow(), error.as_deref(),
                 );
                 draw_eye(c, frame.content, field_r, theme, !masked);
                 if !hint.is_empty() {
@@ -538,7 +538,7 @@ impl Login {
                         // The only way to reveal a password on a handset with no touch
                         // screen. The label says what pressing it will do, not what the
                         // field is doing now — a softkey is a verb.
-                        Some(if masked { "Mostrar" } else { "Ocultar" }),
+                        Some(if masked { crate::strings::show() } else { crate::strings::hide() }),
                         if self.connected { Some(crate::strings::sign_in()) } else { None },
                         None,
                     ],
@@ -823,12 +823,16 @@ fn error_text(e: &AuthError) -> String {
         AuthError::PhoneNumberInvalid => crate::strings::unknown_number().into(),
         AuthError::PhoneCodeInvalid => crate::strings::wrong_code().into(),
         AuthError::PhoneCodeExpired => {
-            "O código expirou. Solicite um novo e tente de novo".into()
+            crate::strings::code_expired().into()
         }
-        AuthError::PasswordInvalid => "Senha incorreta".into(),
-        AuthError::FloodWait(n) => alloc::format!("Muitas tentativas. Aguarde {n} segundos"),
+        AuthError::PasswordInvalid => crate::strings::wrong_password().into(),
+        AuthError::FloodWait(n) => alloc::format!(
+            "{} {n}{}",
+            crate::strings::too_many_attempts(),
+            crate::strings::seconds_suffix()
+        ),
         AuthError::SignUpRequired => {
-            "Este número não tem conta. Este cliente não pode criar uma".into()
+            crate::strings::no_account_here().into()
         }
         AuthError::ApiIdInvalid => crate::strings::bad_api_id().into(),
         AuthError::Other(s) => s.clone(),

@@ -54,8 +54,8 @@ pub fn entries() -> Vec<Action> {
 pub fn label(action: Action, debug_on: bool) -> &'static str {
     match action {
         Action::Refresh => crate::strings::refresh(),
-        Action::DebugLog if debug_on => "Log: ligado",
-        Action::DebugLog => "Log: desligado",
+        Action::DebugLog if debug_on => crate::strings::log_on(),
+        Action::DebugLog => crate::strings::log_off(),
     }
 }
 
@@ -144,8 +144,8 @@ mod tests {
 
     #[test]
     fn the_log_entry_reports_its_own_state() {
-        assert_eq!(label(Action::DebugLog, true), "Log: ligado");
-        assert_eq!(label(Action::DebugLog, false), "Log: desligado");
+        assert_eq!(label(Action::DebugLog, true), crate::strings::log_on());
+        assert_eq!(label(Action::DebugLog, false), crate::strings::log_off());
         assert_eq!(label(Action::Refresh, true), crate::strings::refresh(), "not every entry is a state");
     }
 

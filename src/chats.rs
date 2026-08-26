@@ -52,11 +52,11 @@ impl ChatList {
         let frame = Frame::split(screen, theme, true, true);
 
         chrome::clear(c, theme);
-        let sub = if store.dialogs_loading { "carregando…" } else { &store.status };
+        let sub = if store.dialogs_loading { crate::strings::loading() } else { &store.status };
         chrome::title_bar(c, frame.title, theme, "Telegram", Some(sub));
 
         if store.chats.is_empty() {
-            chrome::placeholder(c, frame.content, theme, "Nenhuma conversa");
+            chrome::placeholder(c, frame.content, theme, crate::strings::no_chats());
         } else {
             let rows = Self::rows(store, theme);
             let bar = self.state.scrollbar(&rows, frame.content.height());

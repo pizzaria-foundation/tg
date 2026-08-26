@@ -45,6 +45,11 @@ use tg::login_decl::{State, Which};
 const OUT: &str = "parity-out";
 
 fn main() -> ExitCode {
+    // Both painters read the same table, so the comparison has to be run in both languages: one
+    // that passes in English and fails in Portuguese is one side reading the table and one not.
+    if std::env::var("LANG_PT").is_ok() {
+        symbian_ui::lang::set(symbian_ui::Lang::Pt);
+    }
     let atlases = Atlases::load();
     // `keep_matching`, so a run that reports "identical" still leaves the pictures behind. A
     // comparison whose output only exists when it fails is one nobody can look at when it passes,

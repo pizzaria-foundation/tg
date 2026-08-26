@@ -154,9 +154,9 @@ pub fn view(
 ) -> Node {
     let m = metrics();
     let detail = match &state.which {
-        Which::Phone { .. } => "entrar",
+        Which::Phone { .. } => crate::strings::title_sign_in(),
         Which::Code { .. } => crate::strings::code(),
-        Which::Password { .. } => "senha",
+        Which::Password { .. } => crate::strings::password(),
         Which::Waiting(msg) => msg.as_str(),
     };
     let bar = TitleBar::new("Telegram").detail(detail);
@@ -176,7 +176,7 @@ pub fn view(
     let (title, prefix, placeholder) = match &state.which {
         Which::Phone { .. } => (crate::strings::phone_number(), Some("+"), "11 999999999"),
         Which::Code { .. } => (crate::strings::code_field(), None, crate::strings::code()),
-        Which::Password { .. } => ("Senha de dois fatores", None, "senha"),
+        Which::Password { .. } => (crate::strings::two_factor_password(), None, crate::strings::password()),
         Which::Waiting(_) => unreachable!("handled above"),
     };
 
@@ -185,7 +185,7 @@ pub fn view(
     // beside it — there is no error yet and inventing one would be a lie about what happened.
     let line = match &state.which {
         Which::Phone { credentials_missing: true } => {
-            Some(String::from("sem api_id: veja apps/telegram/api.conf.example"))
+            Some(String::from(crate::strings::no_api_id()))
         }
         _ => state.error.clone(),
     };
@@ -347,7 +347,7 @@ impl symbian_decl_ui::Widget for Eye {
 fn hint(which: &Which) -> Option<String> {
     match which {
         Which::Code { length: Some(n) } => {
-            let mut s = String::from("Digite os ");
+            let mut s = String::from(crate::strings::enter_the());
             s.push_str(&crate::login::itoa(*n as u32));
             s.push_str(crate::strings::digits_suffix());
             Some(s)
@@ -386,7 +386,7 @@ pub fn softkeys(state: &State) -> Softkeys<Msg> {
         Which::Password { masked, .. } => {
             // The label says what pressing it will do, not what the field is doing now — a softkey
             // is a verb.
-            let bar = bar.options(if *masked { "Mostrar" } else { "Ocultar" }, Msg::ToggleMask);
+            let bar = bar.options(if *masked { crate::strings::show() } else { crate::strings::hide() }, Msg::ToggleMask);
             if state.connected {
                 bar.action(crate::strings::sign_in(), Msg::Submit)
             } else {

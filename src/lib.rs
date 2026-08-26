@@ -581,7 +581,7 @@ impl App {
                 if symbian::clipboard::set_text(&text).is_err() {
                     symbian::log!("[tg] clipboard refused {} chars", text.len());
                     if let Screen::Conversation(conv) = &mut self.screen {
-                        conv.note = Some(String::from("nao foi possivel copiar"));
+                        conv.note = Some(String::from(crate::strings::could_not_copy()));
                     }
                 }
             }
@@ -757,11 +757,11 @@ impl App {
     /// held, rather than appending a page below it.
     pub(crate) fn refresh_dialogs(&mut self) {
         if self.store.dialogs_loading {
-            self.store.status = String::from("ja atualizando...");
+            self.store.status = String::from(crate::strings::already_refreshing());
             return;
         }
         let Some(d) = self.driver.as_mut() else {
-            self.store.status = String::from("sem conexao");
+            self.store.status = String::from(crate::strings::no_connection());
             return;
         };
         let now = symbian::unix_time();
@@ -772,9 +772,9 @@ impl App {
         self.store.dialogs_complete = false;
         self.dialogs_from_top = true;
         self.store.status = if sent {
-            String::from("atualizando...")
+            String::from(crate::strings::refreshing())
         } else {
-            String::from("atualizacao na fila")
+            String::from(crate::strings::refresh_queued())
         };
     }
 
@@ -782,15 +782,15 @@ impl App {
     fn refresh_conversation(&mut self, chat: usize) {
         let Some(c) = self.store.chats.get(chat) else { return };
         if c.loading {
-            self.store.status = String::from("ja atualizando...");
+            self.store.status = String::from(crate::strings::already_refreshing());
             return;
         }
         let Some(peer) = c.peer else {
-            self.store.status = String::from("sem peer");
+            self.store.status = String::from(crate::strings::no_peer());
             return;
         };
         let Some(d) = self.driver.as_mut() else {
-            self.store.status = String::from("sem conexao");
+            self.store.status = String::from(crate::strings::no_connection());
             return;
         };
         let now = symbian::unix_time();
@@ -800,9 +800,9 @@ impl App {
             c.loading = true;
         }
         self.store.status = if sent {
-            String::from("atualizando...")
+            String::from(crate::strings::refreshing())
         } else {
-            String::from("atualizacao na fila")
+            String::from(crate::strings::refresh_queued())
         };
     }
 
@@ -887,7 +887,7 @@ impl App {
     /// Re-fetch a single message to get a fresh file_reference.
     fn refresh_message(&mut self, chat_idx: usize, msg_id: i32) {
         let Some(peer) = self.store.chats.get(chat_idx).and_then(|c| c.peer) else {
-            self.store.status = String::from("refresh: sem peer");
+            self.store.status = String::from(crate::strings::refresh_no_peer());
             return;
         };
         if let Some(d) = self.driver.as_mut() {
@@ -904,7 +904,7 @@ impl App {
         let media = match self.store.chats.get(chat).and_then(|c| c.messages.get(msg_idx)).and_then(|m| m.media.clone()) {
             Some(m) => m,
             None => {
-                self.say(String::from("download: sem media"));
+                self.say(String::from(crate::strings::download_no_media()));
                 return;
             }
         };
@@ -925,14 +925,14 @@ impl App {
         // would spend the user's data to arrive at the same placeholder it already shows.
         if let model::Media::Sticker { .. } = &media {
             symbian::log!("[media] sticker: no decodable preview");
-            self.say(String::from("sticker: formato WebP, sem decoder"));
+            self.say(String::from(crate::strings::sticker_no_decoder()));
             return;
         }
 
         let kind = match media.kind() {
             Some(k) => k,
             None => {
-                self.say(String::from("download: nada para baixar"));
+                self.say(String::from(crate::strings::download_nothing_to_fetch()));
                 return;
             }
         };
@@ -948,14 +948,19 @@ impl App {
             symbian::log!("[media] cache hit");
             match kind {
                 model::MediaKind::Photo => {
-                    self.say(String::from("do cache"));
+                    self.say(String::from(crate::strings::from_the_cache()));
                     self.start_photo_decode(chat, Some(media.file_id()), cached);
                 }
                 model::MediaKind::Voice | model::MediaKind::Audio => {
-                    self.say(String::from("audio: sem suporte ainda"));
+                    self.say(String::from(crate::strings::audio_unsupported()));
                 }
                 model::MediaKind::File => {
-                    self.say(alloc::format!("arquivo: {} KB, no cache", cached.len() / 1024));
+                    self.say(alloc::format!(
+                        "{}: {} KB, {}",
+                        crate::strings::file_label(),
+                        cached.len() / 1024,
+                        crate::strings::in_the_cache()
+                    ));
                 }
             }
             return;
@@ -982,7 +987,7 @@ impl App {
         // so a second request in flight would answer into the first one's bookkeeping and
         // the two would be indistinguishable when they came back.
         if self.pending.is_some() {
-            self.say(String::from("download: aguarde o anterior"));
+            self.say(String::from(crate::strings::download_wait_for_previous()));
             return;
         }
 
@@ -992,7 +997,7 @@ impl App {
             .map(|m| m.id).unwrap_or(0);
         let is_photo = kind == model::MediaKind::Photo;
         let Some(d) = self.driver.as_mut() else {
-            self.say(String::from("download: sem driver"));
+            self.say(String::from(crate::strings::download_no_driver()));
             return;
         };
         let dc = media.dc_id() as u8;
@@ -1014,12 +1019,12 @@ impl App {
             let far = dc != 0 && dc != d.home_dc();
             self.pending = Some(PendingFile { msg_id, kind, dc, req, got: alloc::vec::Vec::new() });
             self.store.status = if far {
-                String::from("conectando ao servidor da midia...")
+                String::from(crate::strings::connecting_to_media_server())
             } else {
-                String::from("baixando...")
+                alloc::format!("{}\u{2026}", crate::strings::downloading())
             };
         } else {
-            self.say(String::from("download: fila (link ocupado)"));
+            self.say(String::from(crate::strings::download_queued()));
         }
     }
 
@@ -1033,13 +1038,13 @@ impl App {
             Some(b) => b,
             None => {
                 symbian::log!("[media] file_dl parse failed");
-                self.say(String::from("download: parse falhou"));
+                self.say(String::from(crate::strings::download_parse_failed()));
                 return;
             }
         };
 
         let Some(mut p) = pending else {
-            self.say(String::from("download: sem pedido correspondente"));
+            self.say(String::from(crate::strings::download_no_request()));
             return;
         };
 
@@ -1052,7 +1057,11 @@ impl App {
 
         if p.got.len() > MAX_FILE_BYTES {
             symbian::log!("[media] file_dl over the size cap");
-            self.say(alloc::format!("arquivo grande demais ({} KB)", p.got.len() / 1024));
+            self.say(alloc::format!(
+                "{} ({} KB)",
+                crate::strings::file_too_big(),
+                p.got.len() / 1024
+            ));
             return;
         }
 
@@ -1068,10 +1077,14 @@ impl App {
                 None => false,
             };
             if sent {
-                self.say(alloc::format!("baixando {} KB...", p.got.len() / 1024));
+                self.say(alloc::format!(
+                    "{} {} KB\u{2026}",
+                    crate::strings::downloading(),
+                    p.got.len() / 1024
+                ));
                 self.pending = Some(p);
             } else {
-                self.say(String::from("download: interrompido"));
+                self.say(String::from(crate::strings::download_interrupted()));
             }
             return;
         }
@@ -1095,11 +1108,15 @@ impl App {
             // did and which blamed the wrong subsystem entirely.
             model::MediaKind::Voice | model::MediaKind::Audio => {
                 symbian::log!("[media] file_dl audio, no decoder yet");
-                self.say(String::from("audio: sem suporte ainda"));
+                self.say(String::from(crate::strings::audio_unsupported()));
             }
             model::MediaKind::File => {
                 let kb = data.len() / 1024;
-                self.say(alloc::format!("arquivo: {kb} KB, sem visualizador"));
+                self.say(alloc::format!(
+                    "{}: {kb} KB, {}",
+                    crate::strings::file_label(),
+                    crate::strings::no_viewer()
+                ));
             }
         }
     }
@@ -1199,7 +1216,7 @@ impl App {
             // exactly the ambiguity that made the last five rounds unreadable: a failure
             // whose cause could be the codec or could be the path not taken.
             symbian::log!("[media] decode: nowhere to write the image");
-            self.say(String::from("decode: sem arquivo para decodificar"));
+            self.say(String::from(crate::strings::decode_no_file()));
             return;
         };
         let started = symbian::Decoder::file(symbian::ShimImages, &path, max_w, max_h);
@@ -1229,7 +1246,7 @@ impl App {
             }
             Err(e) => {
                 symbian::log!("[media] file_dl decode refused");
-                self.say(alloc::format!("decode recusou: {}", e.code()));
+                self.say(alloc::format!("{}: {}", crate::strings::decode_refused(), e.code()));
             }
         }
     }
@@ -1255,7 +1272,7 @@ impl App {
         };
         if status != symbian_sys::SHIM_OK {
             symbian::log!("[media] decode failed");
-            self.say(alloc::format!("decode falhou: {status}"));
+            self.say(alloc::format!("{}: {status}", crate::strings::decode_failed()));
             return;
         }
         match d.take() {
@@ -1277,7 +1294,7 @@ impl App {
             }
             Err(e) => {
                 symbian::log!("[media] decode result unavailable");
-                self.say(alloc::format!("decode sem pixels: {}", e.code()));
+                self.say(alloc::format!("{}: {}", crate::strings::decode_no_pixels(), e.code()));
             }
         }
     }
@@ -1290,7 +1307,7 @@ impl App {
     /// effects: write, ring, launch, and whatever the plan says to do about it.
     fn post_link(&mut self, url: &str) -> alloc::string::String {
         if let Err(e) = symbian::intent::write_request(&mut symbian::ShimFs, url) {
-            return alloc::format!("nao consegui pedir: {e:?}");
+            return alloc::format!("{}: {e:?}", crate::strings::could_not_ask());
         }
         let rang = symbian::intent::signal().is_ok();
         // Only when the bell went unheard is it worth starting anything: a launcher that defined
@@ -1306,18 +1323,18 @@ impl App {
                 // `apps::open_at` takes on the browser path, and the same one `shim_net.cpp` takes
                 // before the access-point dialog.
                 symbian::intent::yield_screen();
-                alloc::format!("abrindo {url}")
+                alloc::format!("{} {url}", crate::strings::opening())
             }
             LinkPlan::FallBackToBrowser => {
                 // Take the request back off the disk first: nobody will ever read it, and one left
                 // behind is a link from today opening by itself on some future first run.
                 let _ = symbian::intent::take_request(&mut symbian::ShimFs);
                 match symbian::apps::open_at(symbian::handlers::NATIVE_BROWSER, url) {
-                    Ok(()) => alloc::format!("abrindo {url}"),
-                    Err(e) => alloc::format!("nao abriu: {e:?}"),
+                    Ok(()) => alloc::format!("{} {url}", crate::strings::opening()),
+                    Err(e) => alloc::format!("{}: {e:?}", crate::strings::did_not_open()),
                 }
             }
-            LinkPlan::Failed(e) => alloc::format!("nao consegui pedir: {e:?}"),
+            LinkPlan::Failed(e) => alloc::format!("{}: {e:?}", crate::strings::could_not_ask()),
         }
     }
 
@@ -1481,12 +1498,13 @@ still active={} mode={} flags={} done={} error={}",
                     // On the screen too, because the log needs a host to read it and the
                     // person holding the phone does not have one.
                     self.say(alloc::format!(
-                        "travou {} {}x{} f{} r{} a{} m{} fl{:x} c{}",
+                        "{} {} {}x{} f{} r{} a{} m{} fl{:x} c{}",
+                        crate::strings::stuck(),
                         self.decode_src, p.native_w, p.native_h, p.frames, p.factor,
                         p.active as i32, p.mode, p.frame_flags, p.continues
                     ));
                 }
-                None => self.say(String::from("travou: decoder sumiu")),
+                None => self.say(String::from(crate::strings::decoder_vanished())),
             }
             // Dropped, so the slot goes back and the next attempt is not refused for want
             // of one. There are four.
@@ -1595,11 +1613,11 @@ still active={} mode={} flags={} done={} error={}",
                             _ => false,
                         };
                         if sent {
-                            self.say(alloc::format!("buscando no servidor {dc}..."));
+                            self.say(alloc::format!("{} {dc}\u{2026}", crate::strings::fetching_from_server()));
                         } else {
                             self.pending = None;
                             self.store.status =
-                                String::from("download: outro servidor, sem rota");
+                                String::from(crate::strings::download_no_route());
                         }
                     } else {
                         self.pending = None;

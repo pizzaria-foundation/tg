@@ -504,6 +504,14 @@ mod parity {
 
     #[test]
     fn the_declared_conversation_is_the_hand_written_one() {
+        // Both painters read `crate::strings`, so this has to be runnable in either language: a
+        // comparison that holds in English and not in Portuguese is one side reading the table and
+        // one side still holding a literal. Run it with
+        // `LANG_PT=1 cargo test the_declared_conversation -- --test-threads=1` — single-threaded
+        // because the language is one global and `strings.rs`'s own tests set it too.
+        if std::env::var("LANG_PT").is_ok() {
+            symbian_ui::lang::set(symbian_ui::Lang::Pt);
+        }
         let atlases = Atlases::load();
         let mut p = Parity::new("parity-out").keep_matching(true);
         atlases.with_themes(|dark, light| {

@@ -551,7 +551,7 @@ mod tests {
             assert_eq!(press(shell, t, Key::Softkey(Softkey::Middle)), Handled::Consumed);
             // No connection behind the mock, and saying so is the whole of what a refresh can do
             // here — what matters is that the message arrived at `refresh_dialogs` at all.
-            assert_eq!(shell.app().store.status, "sem conexao");
+            assert_eq!(shell.app().store.status, crate::strings::no_connection());
             assert!(!shell.app().on_menu(), "and a refresh closes the menu over its own answer");
         });
     }
@@ -810,7 +810,7 @@ mod tests {
                 press(shell, t, Key::Up);
             }
             let note = shell.app().conversation().and_then(|c| c.note.clone());
-            assert_eq!(note.as_deref(), Some("inicio do que esta guardado"));
+            assert_eq!(note.as_deref(), Some(crate::strings::start_of_stored()));
         });
     }
 

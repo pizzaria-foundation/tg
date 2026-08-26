@@ -494,7 +494,7 @@ impl Driver {
         match symbian::timer_after(150) {
             Ok(h) => {
                 self.connect_timer = Some(h);
-                self.status = "iniciando";
+                self.status = crate::strings::starting();
                 Outcome::Redraw
             }
             // No timer means no way to defer, and connecting from here is what used to kill
@@ -538,7 +538,7 @@ impl Driver {
                 }
                 let had = self.link.is_some();
                 self.link = None;
-                self.status = "pausado";
+                self.status = crate::strings::paused();
                 symbian::log!("[net] parked (keypad locked); link_was={had}");
                 Outcome::Redraw
             }
@@ -547,7 +547,7 @@ impl Driver {
             Activity::Background => {
                 self.cancel_link_timers();
                 if self.link.is_none() {
-                    self.status = "em segundo plano";
+                    self.status = crate::strings::in_background();
                 }
                 Outcome::Redraw
             }
@@ -603,12 +603,12 @@ impl Driver {
         symbian::log!("[net] local unix time={}", symbian::unix_time());
         let up = symbian::net::connections_up().unwrap_or(0);
         symbian::log!("[net] connections already up={up}");
-        self.status = if up == 0 { crate::strings::look_for_the_dialog() } else { "conectando" };
+        self.status = if up == 0 { crate::strings::look_for_the_dialog() } else { crate::strings::connecting() };
         match Link::start() {
             Ok(l) => {
                 symbian::log!("[net] attached dc={}", l.dc());
                 self.link = Some(l);
-                self.status = "conectando";
+                self.status = crate::strings::connecting();
                 Outcome::Redraw
             }
             Err(e) => {
@@ -857,7 +857,7 @@ impl Driver {
                     }
                 }
                 symbian::log!("[net] handshake done, session up");
-                self.status = "conectado";
+                self.status = crate::strings::connected();
                 self.retries = 0;
 
                 // A resumed session means the auth key was read from disk — the user is
@@ -973,7 +973,7 @@ impl Driver {
                 if self.may_rebuild_link() && self.retries < 3 {
                     if let Ok(h) = symbian::timer_after(2000) {
                         self.reconnect_timer = Some(h);
-                        self.status = "reconectando";
+                        self.status = crate::strings::reconnecting();
                         return Outcome::Redraw;
                     }
                 }
@@ -1035,7 +1035,7 @@ impl Driver {
                     // case, not an edge. Held and sent on Authenticated; dropping it is what
                     // left the screen on "sending the code" forever.
                     self.pending_call.push((body, tag));
-                    self.status = "enviando...";
+                    self.status = crate::strings::sending();
                 }
                 // Armed either way. A queued request and a sent one are both a request with
                 // no answer, which is the only thing the user can see.
@@ -1043,12 +1043,12 @@ impl Driver {
                 Outcome::Redraw
             }
             LoginProgress::Kdf { password, salt1, salt2 } => {
-                self.status = "derivando a chave...";
+                self.status = crate::strings::deriving_the_key();
                 self.start_work(Queued::Kdf { password, salt1, salt2 });
                 Outcome::Redraw
             }
             LoginProgress::ModPow { base, exp, modulus } => {
-                self.status = "verificando a senha...";
+                self.status = crate::strings::checking_password();
                 self.start_work(Queued::ModPow { base, exp, modulus });
                 Outcome::Redraw
             }
@@ -1065,7 +1065,7 @@ impl Driver {
                 if l.migrate(dc).is_err() {
                     return Outcome::Disconnected(crate::strings::could_not_switch_server());
                 }
-                self.status = "mudando de servidor";
+                self.status = crate::strings::switching_server();
                 // The code is asked for again once the new handshake finishes. Sending it
                 // now would go down a link that has no session yet, so it waits for
                 // Authenticated on the other side.
@@ -1195,7 +1195,7 @@ mod tests {
 
         assert_eq!(d.set_activity(Activity::Pocket), Outcome::Redraw);
         assert!(d.parked());
-        assert_eq!(d.status, "pausado", "the screen has to be able to say why");
+        assert_eq!(d.status, crate::strings::paused(), "the screen has to be able to say why");
         assert_eq!(
             d.set_activity(Activity::Pocket),
             Outcome::None,

@@ -52,6 +52,11 @@ use tg::model::Store;
 const OUT: &str = "parity-out";
 
 fn main() -> ExitCode {
+    // Both painters read the same table, so the comparison has to be run in both languages: one
+    // that passes in English and fails in Portuguese is one side reading the table and one not.
+    if std::env::var("LANG_PT").is_ok() {
+        symbian_ui::lang::set(symbian_ui::Lang::Pt);
+    }
     let atlases = Atlases::load();
     // `keep_matching`, so a passing run still leaves the pictures behind: a comparison whose output
     // only exists when it fails is one nobody looks at when it passes, and looking is how a *shared*

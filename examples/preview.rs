@@ -25,6 +25,12 @@ use symbian_preview::{Atlases, Sheet};
 const OUT: &str = "preview-out";
 
 fn main() {
+    // `LANG_PT=1 cargo run --example preview` renders the same sheets in Portuguese, which is how
+    // the translation is judged: the interface changes and the mock's chat names and messages — the
+    // user's own content — do not.
+    if std::env::var("LANG_PT").is_ok() {
+        symbian_ui::lang::set(symbian_ui::Lang::Pt);
+    }
     let atlases = Atlases::load();
     atlases.with_themes(render);
 }

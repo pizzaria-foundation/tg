@@ -712,7 +712,7 @@ pub fn store_from_dialogs(d: &tg_proto::chats::Dialogs, now: i64) -> Store {
             .iter()
             .find(|n| n.peer == dialog.peer)
             .map(|n| n.title.clone())
-            .unwrap_or_else(|| String::from("(sem nome)"));
+            .unwrap_or_else(|| String::from(crate::strings::no_name()));
 
         let top = d.top_of(dialog);
         let (text, outgoing, date) = match top {
@@ -900,7 +900,7 @@ pub fn merge_dialogs(store: &mut Store, d: &tg_proto::chats::Dialogs, now: i64) 
             .iter()
             .find(|n| n.peer == dialog.peer)
             .map(|n| n.title.clone())
-            .unwrap_or_else(|| String::from("(sem nome)"));
+            .unwrap_or_else(|| String::from(crate::strings::no_name()));
 
         let top = d.top_of(dialog);
         let (text, outgoing, date) = match top {

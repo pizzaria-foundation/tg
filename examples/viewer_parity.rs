@@ -26,6 +26,11 @@ use symbian_ui::{Key, KeyEvent, Size, Theme, Viewer};
 const OUT: &str = "parity-out";
 
 fn main() -> ExitCode {
+    // Both painters read the same table, so the comparison has to be run in both languages: one
+    // that passes in English and fails in Portuguese is one side reading the table and one not.
+    if std::env::var("LANG_PT").is_ok() {
+        symbian_ui::lang::set(symbian_ui::Lang::Pt);
+    }
     let atlases = Atlases::load();
     let mut p = Parity::new(OUT).keep_matching(true);
     atlases.with_themes(|dark, light| {

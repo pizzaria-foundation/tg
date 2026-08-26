@@ -504,7 +504,7 @@ impl Link {
     /// dialog by then, which is what every other program on the handset does.
     fn on_bearer_event(&mut self, ev: &sys::ShimEvent) -> Progress {
         match self.bearer.on_event(&mut self.net, ev) {
-            Ok(false) => Progress::Step("aguardando rede"),
+            Ok(false) => Progress::Step(crate::strings::waiting_for_network()),
             Ok(true) => {
                 let iap = self.bearer.iap().unwrap_or(0);
                 self.note("bearer up, iap", Note::Num(iap as i64));
@@ -525,7 +525,7 @@ impl Link {
                 }
                 self.sock = Some(sock);
                 self.phase = Phase::Connecting;
-                Progress::Step("conectando ao Telegram")
+                Progress::Step(crate::strings::connecting_to_telegram())
             }
             Err(e) => {
                 self.note("bearer failed", Note::Num(e.code() as i64));
@@ -617,12 +617,12 @@ impl Link {
                     match self.client.on_modpow(&out, &mut self.rng) {
                         Ok(steps) => {
                             self.todo.extend(steps.into_iter().rev());
-                            self.drain(unix_time).unwrap_or(Progress::Step("key material"))
+                            self.drain(unix_time).unwrap_or(Progress::Step(crate::strings::key_material()))
                         }
-                        Err(_) => self.die("the handshake rejected the exponentiation"),
+                        Err(_) => self.die(crate::strings::handshake_rejected_exponentiation()),
                     }
                 }
-                Err(_) => self.die("the worker thread failed"),
+                Err(_) => self.die(crate::strings::worker_thread_failed()),
             };
         }
 
@@ -639,19 +639,19 @@ impl Link {
                 self.phase = Phase::Running;
                 let greeting = self.client.greeting();
                 if self.write_out(greeting).is_err() {
-                    return self.die("could not send the transport greeting");
+                    return self.die(crate::strings::could_not_send_greeting());
                 }
                 // `drain` answers for a fresh session (it has req_pq_multi to send) and for
                 // a resumed one (it has the hand-queued `Step::Ready`). The fallback is now
                 // only reachable if the queue is empty, which would be a bug rather than a
                 // state to describe — so it says so instead of naming a handshake that is
                 // not happening.
-                self.drain(unix_time).unwrap_or(Progress::Step("conectado, sem nada a enviar"))
+                self.drain(unix_time).unwrap_or(Progress::Step(crate::strings::connected_nothing_to_send()))
             }
             NetProgress::Received(_) => {
                 let n = match Self::read_into(self.sock.as_mut(), &mut self.net, &mut self.buf) {
                     Ok(n) => n,
-                    Err(_) => return self.die("read failed"),
+                    Err(_) => return self.die(crate::strings::read_failed()),
                 };
                 // The borrow has to end before `feed` touches `self`, hence the copy. It is
                 // a few kilobytes against a protocol that just spent 815 ms on arithmetic.
@@ -667,7 +667,7 @@ impl Link {
                         // the stored copy is worthless -- keeping it means every launch
                         // spends a round trip rediscovering that.
                         let _ = Self::forget(session_store::Invalidate::UnknownKey);
-                        self.die("the server no longer knows this auth key")
+                        self.die(crate::strings::server_forgot_this_key())
                     }
                     Err(e) => {
                         // The bytes first, then the name. A parse failure is only diagnosable
@@ -678,7 +678,7 @@ impl Link {
                     }
                 }
             }
-            NetProgress::Closed => self.die("the server closed the connection"),
+            NetProgress::Closed => self.die(crate::strings::server_closed_connection()),
             NetProgress::Sent(n) => {
                 self.note("tx completed, bytes", Note::Num(n as i64));
                 Progress::None
@@ -692,7 +692,7 @@ impl Link {
                         Ok(b) => {
                             self.bearer = b;
                             self.phase = Phase::Bearer;
-                            return Progress::Step("escolha um ponto de acesso");
+                            return Progress::Step(crate::strings::choose_access_point());
                         }
                         Err(e) => {
                             self.note("bearer retry failed", Note::Num(e.code() as i64));
@@ -700,7 +700,7 @@ impl Link {
                         }
                     }
                 }
-                self.die("the connection failed")
+                self.die(crate::strings::connection_failed())
             }
             _ => Progress::None,
         }
@@ -719,7 +719,7 @@ impl Link {
                 Step::Send(bytes) => {
                     self.note("tx bytes", Note::Num(bytes.len() as i64));
                     if self.write_out(&bytes).is_err() {
-                        return Some(self.die("write failed"));
+                        return Some(self.die(crate::strings::write_failed()));
                     }
                 }
                 Step::ModPow { base, exp, modulus } => {
@@ -729,11 +729,11 @@ impl Link {
                     self.work_is_caller = false;
                     let job = ModPow { base: &base, exp: &exp, modulus: &modulus };
                     if self.job.submit(&job).is_err() {
-                        return Some(self.die("the worker thread would not take the job"));
+                        return Some(self.die(crate::strings::worker_refused_job()));
                     }
                     // Deliberately reported: it is the slow part of a login, and a status
                     // line that goes quiet for four seconds reads as a freeze.
-                    return Some(Progress::Step("computing the key"));
+                    return Some(Progress::Step(crate::strings::computing_the_key()));
                 }
                 Step::Ready => {
                     // Acks first, so the ack for anything already received goes out before
@@ -789,7 +789,7 @@ impl Link {
                 self.note("bad_msg_notification code", Note::Num(code as i64));
                 self.note("rejected our msg_id at", Note::Num((bad_msg_id >> 32) as i64));
                 if code != 16 && code != 17 {
-                    return Some(Progress::Step("o servidor recusou uma mensagem"));
+                    return Some(Progress::Step(crate::strings::server_refused_a_message()));
                 }
 
                 // 16 and 17 are "your msg_id is outside my window", which on a handset means
@@ -814,7 +814,7 @@ impl Link {
                 let _ = self.persist();
 
                 let Some((body, tag)) = self.last_call.clone() else {
-                    return Some(Progress::Step("relogio ajustado"));
+                    return Some(Progress::Step(crate::strings::clock_adjusted()));
                 };
                 self.note("retrying after clock fix, tag", Note::Num(tag as i64));
                 match self.client.call(&body, tag, unix_time, 0, &mut self.rng) {
@@ -822,14 +822,14 @@ impl Link {
                         // Written here rather than queued: `drain` is not running, this is
                         // inside the update loop it feeds.
                         if self.write_out(&bytes).is_err() {
-                            return Some(self.die("write failed"));
+                            return Some(self.die(crate::strings::write_failed()));
                         }
                     }
                     // Anything else means the client would not build the request again, and
                     // silently doing nothing is what makes a status line lie.
                     _ => return Some(self.die(crate::strings::could_not_resend_after_clock())),
                 }
-                Some(Progress::Step("relogio ajustado"))
+                Some(Progress::Step(crate::strings::clock_adjusted()))
             }
             _ => None,
         }
@@ -850,7 +850,7 @@ impl Link {
         match self.client.call(&body, tag, unix_time, 0, &mut self.rng) {
             Ok((_, Step::Send(bytes))) => {
                 if self.write_out(&bytes).is_err() {
-                    return Some(self.die("write failed"));
+                    return Some(self.die(crate::strings::write_failed()));
                 }
                 None
             }
@@ -891,21 +891,21 @@ fn describe(e: &tg_proto::client::Error) -> &'static str {
     use tg_proto::client::Error as E;
     use tg_proto::handshake::Error as H;
     match e {
-        E::Transport(_) => "erro de enquadramento",
+        E::Transport(_) => crate::strings::framing_error(),
         E::Session(_) => crate::strings::could_not_decrypt(),
         E::Rpc(_) => crate::strings::unreadable_response(),
         E::NotReady => crate::strings::not_connected_yet(),
-        E::Server(c) if *c == -404 => "o servidor esqueceu a chave",
-        E::Server(_) => "o servidor recusou",
+        E::Server(c) if *c == -404 => crate::strings::server_forgot_key(),
+        E::Server(_) => crate::strings::server_refused(),
         E::Handshake(h) => match h {
             H::Tl(_) => crate::strings::handshake_unreadable_tl(),
-            H::Crypto(_) => "handshake: falha de cripto",
-            H::OutOfOrder => "handshake: resposta fora de ordem",
+            H::Crypto(_) => crate::strings::handshake_crypto_failed(),
+            H::OutOfOrder => crate::strings::handshake_out_of_order(),
             H::NonceMismatch => crate::strings::handshake_nonce_mismatch(),
             H::NotFactorable(_) => crate::strings::handshake_no_factor(),
-            H::NoUsableKey => "handshake: nenhuma chave RSA nossa",
-            H::ServerRejected => "handshake: servidor recusou os dados",
-            H::UnknownDhPrime => "handshake: primo DH desconhecido",
+            H::NoUsableKey => crate::strings::handshake_no_rsa_key(),
+            H::ServerRejected => crate::strings::handshake_server_rejected(),
+            H::UnknownDhPrime => crate::strings::handshake_unknown_dh_prime(),
             H::BadDhParams => crate::strings::handshake_bad_dh(),
             H::DhGenFailed => crate::strings::handshake_key_failed(),
             H::KeyMismatch => crate::strings::handshake_keys_differ(),

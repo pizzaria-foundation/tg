@@ -311,12 +311,12 @@ impl Conversation {
     pub(crate) fn activate(&mut self, chat: &Chat) -> ConvAction {
         if let Some(url) = self.focused_link(chat) {
             let url = alloc::string::String::from(url);
-            self.note = Some(alloc::format!("abrindo {url}"));
+            self.note = Some(alloc::format!("{} {url}", crate::strings::opening()));
             return ConvAction::OpenLink(url);
         }
         if let Some(msg) = chat.messages.get(self.state.selected) {
             if msg.media.is_some() {
-                self.note = Some(alloc::string::String::from("abrindo…"));
+                self.note = Some(alloc::string::String::from(crate::strings::opening_ellipsis()));
                 return ConvAction::OpenMedia(self.state.selected);
             }
         }
@@ -479,7 +479,7 @@ impl Conversation {
             // Re-fetch this conversation. Nothing here is pushed, so a reply that arrived
             // while the screen was open is invisible until something asks for it.
             Key::Softkey(Softkey::Left) => {
-                self.note = Some(alloc::string::String::from("atualizando…"));
+                self.note = Some(alloc::string::String::from(crate::strings::refreshing()));
                 return (Handled::Consumed, ConvAction::Refresh);
             }
             Key::Softkey(Softkey::Middle) | Key::Enter | Key::Call | Key::Select => {
@@ -511,7 +511,7 @@ impl Conversation {
                 // there is nothing to fetch — asking would spend a request on a page that
                 // is discarded on arrival. Say so instead of appearing to hang.
                 if chat.windowed && !chat.complete {
-                    self.note = Some(alloc::string::String::from("inicio do que esta guardado"));
+                    self.note = Some(alloc::string::String::from(crate::strings::start_of_stored()));
                     return (Handled::Consumed, ConvAction::None);
                 }
                 return (Handled::Consumed, ConvAction::LoadMore);
@@ -531,7 +531,7 @@ impl Conversation {
             Key::Ctrl('c') if self.focus == Focus::Transcript => {
                 if let Some(url) = self.focused_link(chat) {
                     let url = alloc::string::String::from(url);
-                    self.note = Some(alloc::format!("copiado: {url}"));
+                    self.note = Some(alloc::format!("{}: {url}", crate::strings::copied()));
                     return (Handled::Consumed, ConvAction::Copy(url));
                 }
                 let text = chat
@@ -542,10 +542,10 @@ impl Conversation {
                 if text.is_empty() {
                     // A photo with no caption. Saying nothing happened beats a "copiado" over an
                     // empty clipboard.
-                    self.note = Some(alloc::string::String::from("nada para copiar"));
+                    self.note = Some(alloc::string::String::from(crate::strings::nothing_to_copy()));
                     return (Handled::Consumed, ConvAction::None);
                 }
-                self.note = Some(alloc::string::String::from("mensagem copiada"));
+                self.note = Some(alloc::string::String::from(crate::strings::message_copied()));
                 return (Handled::Consumed, ConvAction::Copy(text));
             }
             // Left/Right in Transcript: move one message, not a page jump.
@@ -600,7 +600,7 @@ impl Conversation {
     /// had to report.
     pub(crate) fn subtitle(&self, chat: &Chat) -> Option<&str> {
         if chat.loading {
-            Some("carregando…")
+            Some(crate::strings::loading())
         } else {
             self.note.as_deref()
         }
@@ -662,7 +662,7 @@ impl Conversation {
         let focused = self.focus == Focus::Composer;
 
         if self.composer.is_empty() {
-            c.draw_text_in(field, "Mensagem…", theme.fonts.body, p.dim, Align::Start);
+            c.draw_text_in(field, crate::strings::compose_placeholder(), theme.fonts.body, p.dim, Align::Start);
         } else {
             // Under the text, so the characters stay on top of their own highlight.
             if let Some((from, to)) = self.composer.selection() {
@@ -813,7 +813,7 @@ fn media_label(media: &crate::model::Media, font: &dyn symbian_ui::Font) -> allo
         // A microphone for a voice note, a note for a music file: the same distinction the
         // `voice` flag makes in the protocol, which is why reading that flag mattered.
         Media::Voice { duration, .. } => {
-            alloc::format!("[{} {}]", mark('\u{1F3A4}', "Voz"), mmss(*duration))
+            alloc::format!("[{} {}]", mark('\u{1F3A4}', crate::strings::media_voice_short()), mmss(*duration))
         }
         Media::Audio { filename, duration, .. } => {
             let m = mark('\u{1F3B5}', crate::strings::media_audio());
@@ -831,7 +831,7 @@ fn media_label(media: &crate::model::Media, font: &dyn symbian_ui::Font) -> allo
                 alloc::format!("[{m} {filename} · {}]", size_fmt(*size))
             }
         }
-        Media::Unknown => alloc::string::String::from("[Midia]"),
+        Media::Unknown => alloc::format!("[{}]", crate::strings::media_other()),
     }
 }
 
@@ -1432,7 +1432,7 @@ mod link_tests {
             other => panic!("expected the message text, got {other:?}"),
         }
         // And it says so, because a copy is invisible otherwise — nothing on the screen changes.
-        assert_eq!(conv.note.as_deref(), Some("mensagem copiada"));
+        assert_eq!(conv.note.as_deref(), Some(crate::strings::message_copied()));
     }
 
     #[test]
@@ -1462,7 +1462,7 @@ mod link_tests {
         let chat = chat_of(&[""]);
         let mut conv = conv_on(&chat, &t, 0);
         assert!(matches!(press(&mut conv, &chat, &t, Key::Ctrl('c')), ConvAction::None));
-        assert_eq!(conv.note.as_deref(), Some("nada para copiar"));
+        assert_eq!(conv.note.as_deref(), Some(crate::strings::nothing_to_copy()));
     }
 
     #[test]
