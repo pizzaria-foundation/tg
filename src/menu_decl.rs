@@ -17,12 +17,12 @@
 //!
 //! Its left softkey was "Atualizar", spending the one slot a Symbian screen has for *everything
 //! else* on a single verb. The moment there was a second thing to offer — the run-time log switch —
-//! the slot had to become "Opções", which is the convention every other application on the phone
+//! the slot had to become Opções, which is the convention every other application on the phone
 //! follows and the one the launcher and the calendar already use here.
 //!
 //! # The log entry carries its own state
 //!
-//! `Log: ligado` / `Log: desligado`, rather than a plain "Log de depuração" that toggles something
+//! `Log: ligado` / `Log: desligado`, rather than a plain Log de depuração that toggles something
 //! invisible. And selecting it does **not** close the menu, so the label the user just changed is
 //! still on screen — the only feedback a switch like this can have.
 
@@ -53,7 +53,7 @@ pub fn entries() -> Vec<Action> {
 /// An entry's label, with the state folded in for the entries that *are* a state.
 pub fn label(action: Action, debug_on: bool) -> &'static str {
     match action {
-        Action::Refresh => "Atualizar",
+        Action::Refresh => crate::strings::refresh(),
         Action::DebugLog if debug_on => "Log: ligado",
         Action::DebugLog => "Log: desligado",
     }
@@ -72,10 +72,10 @@ pub enum Msg {
 
 /// The softkey bar: choose, or leave.
 ///
-/// The middle slot is the action, which is where this hardware's thumb goes, and "Voltar" is the way
+/// The middle slot is the action, which is where this hardware's thumb goes, and Voltar is the way
 /// out. Nothing on the left: a menu opened from a menu is not a thing that can happen.
 pub fn softkeys() -> Softkeys<Msg> {
-    Softkeys::new().action("Escolher", Msg::Run).back("Voltar", Msg::Back)
+    Softkeys::new().action(symbian_ui::strings::select(), Msg::Run).back(symbian_ui::strings::back(), Msg::Back)
 }
 
 /// What a key means before the list sees it.
@@ -95,7 +95,7 @@ pub fn view(selected: usize, debug_on: bool, out: &Outbox<Msg>, slots: &mut Slot
     let moved = out.clone();
     Node::leaf(
         Screen::new()
-            .title("Opções")
+            .title(symbian_ui::strings::options())
             .content(
                 ScrollList::new(slots, count, row_height())
                     .selected(selected)
@@ -146,7 +146,7 @@ mod tests {
     fn the_log_entry_reports_its_own_state() {
         assert_eq!(label(Action::DebugLog, true), "Log: ligado");
         assert_eq!(label(Action::DebugLog, false), "Log: desligado");
-        assert_eq!(label(Action::Refresh, true), "Atualizar", "not every entry is a state");
+        assert_eq!(label(Action::Refresh, true), crate::strings::refresh(), "not every entry is a state");
     }
 
     /// Refresh stays first: it is what the softkey used to do, and a user who pressed the left key
@@ -235,6 +235,12 @@ mod tests {
 
     #[test]
     fn the_bar_offers_a_choice_and_a_way_out() {
-        assert_eq!(softkeys().labels(), [None, Some("Escolher"), Some("Voltar")]);
+        // Read from the same tables the bar reads. A test that spelled the words would be
+        // testing the translation — which has its own test, in `strings.rs` — and would fail on
+        // every phone whose language is not the one it was written on.
+        assert_eq!(
+            softkeys().labels(),
+            [None, Some(symbian_ui::strings::select()), Some(symbian_ui::strings::back())]
+        );
     }
 }

@@ -3,7 +3,7 @@
 //! The smallest of the migrated screens, and the one that says what the shape is *for*. The viewer
 //! itself is a toolkit widget — `symbian_ui::Viewer` — which pans with the D-pad, clamps at the edges
 //! and blits once per frame. None of that is layout. What the hand-written screen added around it was
-//! furniture: a title bar reading "Foto" and a right softkey reading "Voltar", both drawn by
+//! furniture: a title bar reading "Foto" and a right softkey reading Voltar, both drawn by
 //! `Viewer::draw` because there was nowhere else to put them.
 //!
 //! Here they are a declaration, and `Viewer::draw_image` draws the pixels into the band the layout
@@ -37,7 +37,7 @@ pub enum Msg {
 /// which answers exactly as the hand-written screen did. A label would have been a second name for
 /// the same key.
 pub fn softkeys() -> Softkeys<Msg> {
-    Softkeys::new().back("Voltar", Msg::Back)
+    Softkeys::new().back(symbian_ui::strings::back(), Msg::Back)
 }
 
 /// What a key means before the image sees it.
@@ -50,7 +50,7 @@ pub fn view(viewer: &Shared, out: &Outbox<Msg>) -> Node {
     Node::leaf(
         Screen::new()
             // The application's word, not the toolkit's: `symbian-ui` ships no text.
-            .title("Foto")
+            .title(crate::strings::media_photo())
             .content(Image { viewer: viewer.clone(), out: out.clone() })
             .softkeys(softkeys()),
     )

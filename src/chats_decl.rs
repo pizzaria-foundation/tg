@@ -320,18 +320,18 @@ pub fn row_height() -> i32 {
 /// The softkey bar this screen offers.
 ///
 /// One declaration, drawn by [`view`] and dispatched by [`on_key`] — which is the whole point of
-/// [`Softkeys`]. "Abrir" is offered even with nothing to open, because the hand-written screen offers
+/// [`Softkeys`]. Abrir is offered even with nothing to open, because the hand-written screen offers
 /// it and the hand-written screen is what ships; pressing it on an empty list does nothing, exactly
 /// as `ChatList::activate` does nothing. A bar that dropped the label would be a nicer screen and a
 /// failed comparison.
 pub fn softkeys(loading: bool) -> Softkeys<Msg> {
-    // "Opções" rather than "Atualizar": one slot cannot be spent on one verb once there is a second
+    // Opções rather than "Atualizar": one slot cannot be spent on one verb once there is a second
     // thing to offer, and refreshing is the menu's first entry — see `crate::menu_decl`.
     //
     // "..." while a request is in flight stays, because it is still the only feedback this screen
     // has that anything is happening. The label under it is the menu's, not the refresh's.
-    let left = if loading { "..." } else { "Opções" };
-    Softkeys::new().options(left, Msg::Options).action("Abrir", Msg::Open).back("Sair", Msg::Quit)
+    let left = if loading { "..." } else { symbian_ui::strings::options() };
+    Softkeys::new().options(left, Msg::Options).action(symbian_ui::strings::open(), Msg::Open).back(symbian_ui::strings::exit(), Msg::Quit)
 }
 
 /// What a key means on this screen, before any widget sees it.
@@ -437,7 +437,7 @@ mod tests {
 
         let row = &rows(&store)[0];
         // The media label, not the caption and certainly not the bytes.
-        assert_eq!(row.preview, "Foto");
+        assert_eq!(row.preview, crate::strings::media_photo());
         assert!(row.preview.capacity() < 64, "the row is holding something it should not be");
     }
 
@@ -471,9 +471,16 @@ mod tests {
     fn the_softkeys_mean_what_the_hand_written_screen_means() {
         assert_eq!(on_key(false, press(Key::Softkey(Softkey::Left))), Some(Msg::Options));
         assert_eq!(on_key(false, press(Key::Softkey(Softkey::Right))), Some(Msg::Quit));
-        assert_eq!(softkeys(false).labels(), [Some("Opções"), Some("Abrir"), Some("Sair")]);
+        assert_eq!(softkeys(false).labels(), [
+                Some(symbian_ui::strings::options()),
+                Some(symbian_ui::strings::open()),
+                Some(symbian_ui::strings::exit()),
+            ]);
         // Mid-request, the left label is the only progress this screen shows.
-        assert_eq!(softkeys(true).labels(), [Some("..."), Some("Abrir"), Some("Sair")]);
+        assert_eq!(
+            softkeys(true).labels(),
+            [Some("..."), Some(symbian_ui::strings::open()), Some(symbian_ui::strings::exit())]
+        );
     }
 
     #[test]

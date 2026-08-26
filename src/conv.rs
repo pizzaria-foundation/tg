@@ -608,8 +608,8 @@ impl Conversation {
 
     /// The softkey labels: refresh, send when there is something to send, back.
     pub(crate) fn labels(&self) -> [Option<&'static str>; 3] {
-        let send = if self.composer.is_empty() { None } else { Some("Enviar") };
-        [Some("Atualizar"), send, Some("Voltar")]
+        let send = if self.composer.is_empty() { None } else { Some(crate::strings::send()) };
+        [Some(crate::strings::refresh()), send, Some(symbian_ui::strings::back())]
     }
 
     /// The transcript, in the band it was given.
@@ -793,7 +793,7 @@ fn media_label(media: &crate::model::Media, font: &dyn symbian_ui::Font) -> allo
     };
     match media {
         Media::Photo { size, .. } => {
-            let m = mark('\u{1F5BC}', "Foto");
+            let m = mark('\u{1F5BC}', crate::strings::media_photo());
             if *size > 0 {
                 alloc::format!("[{m} {}]", size_fmt(*size))
             } else {
@@ -816,7 +816,7 @@ fn media_label(media: &crate::model::Media, font: &dyn symbian_ui::Font) -> allo
             alloc::format!("[{} {}]", mark('\u{1F3A4}', "Voz"), mmss(*duration))
         }
         Media::Audio { filename, duration, .. } => {
-            let m = mark('\u{1F3B5}', "Audio");
+            let m = mark('\u{1F3B5}', crate::strings::media_audio());
             if filename.is_empty() {
                 alloc::format!("[{m} {}]", mmss(*duration))
             } else {
@@ -824,7 +824,7 @@ fn media_label(media: &crate::model::Media, font: &dyn symbian_ui::Font) -> allo
             }
         }
         Media::File { filename, size, .. } => {
-            let m = mark('\u{1F4CE}', "Arquivo");
+            let m = mark('\u{1F4CE}', crate::strings::media_file());
             if filename.is_empty() {
                 alloc::format!("[{m} {}]", size_fmt(*size))
             } else {
@@ -1161,7 +1161,10 @@ pub(crate) mod tests {
             preview: Some(alloc::vec![0xFF, 0xD8, 0xFF, 0xE0]),
         };
         let label = media_label(&with_preview, &f);
-        assert!(label.starts_with("[Foto"), "still a label: {label}");
+        assert!(
+            label.starts_with(&alloc::format!("[{}", crate::strings::media_photo())),
+            "still a label: {label}"
+        );
         assert!(label.contains("KB"), "and it says what opening would cost: {label}");
     }
 

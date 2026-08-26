@@ -256,7 +256,7 @@ impl Login {
 
     /// Back to the phone number, with an empty field.
     ///
-    /// Empty and not pre-filled, which is what the hand-written code screen's "Voltar" did — and it
+    /// Empty and not pre-filled, which is what the hand-written code screen's Voltar did — and it
     /// disagrees with [`Self::show_phone`] and [`Self::set_error`], which come back through
     /// `make_phone_screen` and *do* pre-fill from the last number. That inconsistency is the
     /// original's and is kept on purpose: it is behaviour, a pixel comparison cannot see it, and
@@ -462,31 +462,31 @@ impl Login {
                     error.as_deref()
                 };
                 draw_field_centered(
-                    c, frame.content, theme, "Número de telefone",
+                    c, frame.content, theme, crate::strings::phone_number(),
                     Some("+"), Some("11 999999999"), &field.borrow(), line,
                 );
                 chrome::softkey_bar(
                     c, frame.softkeys, theme,
-                    [None, if missing || !self.connected { None } else { Some("Avançar") }, None],
+                    [None, if missing || !self.connected { None } else { Some(crate::strings::next()) }, None],
                 );
                 draw_status(c, frame.content.x0, frame.softkeys.y0, theme);
             }
             Screen::Code { ref field, length, ref error } => {
                 chrome::title_bar(
-                    c, frame.title, theme, "Telegram", Some("código"),
+                    c, frame.title, theme, "Telegram", Some(crate::strings::code()),
                 );
                 draw_field_centered(
-                    c, frame.content, theme, "Código",
-                    None, Some("código"), &field.borrow(), error.as_deref(),
+                    c, frame.content, theme, crate::strings::code_field(),
+                    None, Some(crate::strings::code()), &field.borrow(), error.as_deref(),
                 );
                 let hint = match length {
                     Some(n) => {
                         let mut s = String::from("Digite os ");
                         s.push_str(&itoa(*n as u32));
-                        s.push_str(" dígitos");
+                        s.push_str(crate::strings::digits_suffix());
                         s
                     }
-                    None => String::from("Digite o código enviado por SMS"),
+                    None => String::from(crate::strings::enter_sms_code()),
                 };
                 c.draw_text_in(
                     Rect::from_xywh(
@@ -503,7 +503,7 @@ impl Login {
                 );
                 chrome::softkey_bar(
                     c, frame.softkeys, theme,
-                    [Some("Voltar"), if self.connected { Some("Entrar") } else { None }, None],
+                    [Some(symbian_ui::strings::back()), if self.connected { Some(crate::strings::sign_in()) } else { None }, None],
                 );
                 draw_status(c, frame.content.x0, frame.softkeys.y0, theme);
             }
@@ -539,7 +539,7 @@ impl Login {
                         // screen. The label says what pressing it will do, not what the
                         // field is doing now — a softkey is a verb.
                         Some(if masked { "Mostrar" } else { "Ocultar" }),
-                        if self.connected { Some("Entrar") } else { None },
+                        if self.connected { Some(crate::strings::sign_in()) } else { None },
                         None,
                     ],
                 );
@@ -552,7 +552,7 @@ impl Login {
                 chrome::placeholder(c, frame.content, theme, msg);
                 chrome::softkey_bar(
                     c, frame.softkeys, theme,
-                    [None, None, Some("Cancelar")],
+                    [None, None, Some(symbian_ui::strings::cancel())],
                 );
             }
         }
@@ -820,8 +820,8 @@ fn progress(act: Action) -> Progress {
 
 fn error_text(e: &AuthError) -> String {
     match e {
-        AuthError::PhoneNumberInvalid => "Número não reconhecido pelo Telegram".into(),
-        AuthError::PhoneCodeInvalid => "Código incorreto. Verifique e tente de novo".into(),
+        AuthError::PhoneNumberInvalid => crate::strings::unknown_number().into(),
+        AuthError::PhoneCodeInvalid => crate::strings::wrong_code().into(),
         AuthError::PhoneCodeExpired => {
             "O código expirou. Solicite um novo e tente de novo".into()
         }
@@ -830,7 +830,7 @@ fn error_text(e: &AuthError) -> String {
         AuthError::SignUpRequired => {
             "Este número não tem conta. Este cliente não pode criar uma".into()
         }
-        AuthError::ApiIdInvalid => "Erro de configuração (api_id inválido)".into(),
+        AuthError::ApiIdInvalid => crate::strings::bad_api_id().into(),
         AuthError::Other(s) => s.clone(),
     }
 }

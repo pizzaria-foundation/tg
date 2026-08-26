@@ -153,7 +153,7 @@ impl DeclarativeApp for Tg {
         // it, and for the reason its comment gives: the toolkit's own path only fires when every
         // widget below has returned `Ignored`, and a composer consumes whatever it is given. It has
         // to be here rather than on a bar because it is not a softkey, and because a screen whose
-        // back slot means something else — the login code screen's "Voltar" — would otherwise answer
+        // back slot means something else — the login code screen's Voltar — would otherwise answer
         // it and the phone would feel stuck.
         if ev.key == symbian_ui::Key::End {
             return Some(Msg::Exit);
@@ -202,7 +202,7 @@ impl DeclarativeApp for Tg {
                 }
                 chats_decl::Msg::Open => {
                     let i = app.chats_selected;
-                    // An empty list has nothing to open. The bar still says "Abrir", because the
+                    // An empty list has nothing to open. The bar still says Abrir, because the
                     // hand-written screen says it and that screen is what the comparison measures
                     // against; pressing it does nothing, exactly as `ChatList::activate` did.
                     if i < app.store.chats.len() {
@@ -472,7 +472,7 @@ impl symbian_ui::App for Shell {
 
     /// Either half may have decided to go.
     ///
-    /// The declarative screen's "Sair" becomes `Cmd::Exit` and lands on the bridge's flag; the old
+    /// The declarative screen's Sair becomes `Cmd::Exit` and lands on the bridge's flag; the old
     /// screens set `App::should_exit` directly, and the red key does it from anywhere. A host that
     /// asked only one of them would find an application that closes on some screens.
     fn should_exit(&self) -> bool {

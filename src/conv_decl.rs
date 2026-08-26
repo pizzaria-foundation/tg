@@ -135,11 +135,11 @@ pub fn view(app: &Rc<RefCell<App>>, out: &Outbox<Msg>) -> Node {
 /// first character typed and goes away with the last one deleted, which is what the hand-written
 /// screen does — and is the reason `Screen`'s labels come from the same value the dispatch reads.
 pub fn softkeys(composer_empty: bool) -> Softkeys<Msg> {
-    let bar = Softkeys::new().options("Atualizar", Msg::Refresh).back("Voltar", Msg::Back);
+    let bar = Softkeys::new().options(crate::strings::refresh(), Msg::Refresh).back(symbian_ui::strings::back(), Msg::Back);
     if composer_empty {
         bar
     } else {
-        bar.action("Enviar", Msg::Send)
+        bar.action(crate::strings::send(), Msg::Send)
     }
 }
 
@@ -152,7 +152,7 @@ pub fn softkeys(composer_empty: bool) -> Softkeys<Msg> {
 /// slot — so the action is claimed here only when the composer has the keyboard, and otherwise falls
 /// through to the transcript, which knows what the cursor is on.
 ///
-/// That leaves the bar reading "Enviar" while Select opens a photo, whenever there is text in the
+/// That leaves the bar reading Enviar while Select opens a photo, whenever there is text in the
 /// composer and focus is in the transcript. It is the hand-written screen's behaviour exactly, and it
 /// is the label-lies-about-the-key shape this crate's `keys` module exists to prevent — recorded here
 /// rather than fixed, because fixing it means changing what the bar draws and the comparison this
@@ -180,7 +180,7 @@ pub fn on_key(focus: Focus, composer_empty: bool, ev: KeyEvent) -> Option<Msg> {
 ///
 /// The bridge does not rebuild the view for a key a widget consumed, and it is right not to: a caret
 /// moving is not a change to the *description* of a screen. Except when it is. Type the first
-/// character into this composer and the softkey bar gains "Enviar" — a label that lives in the tree,
+/// character into this composer and the softkey bar gains Enviar — a label that lives in the tree,
 /// built the last time `view` ran. Without saying so, the bar appears on the next keypress that
 /// happens to invalidate for another reason, or never.
 ///
@@ -194,7 +194,7 @@ pub fn on_key(focus: Focus, composer_empty: bool, ev: KeyEvent) -> Option<Msg> {
 struct ViewState {
     /// The title bar's detail line, which the routing writes to on half a dozen paths.
     note: Option<String>,
-    /// Whether the bar offers "Enviar".
+    /// Whether the bar offers Enviar.
     composer_empty: bool,
 }
 
@@ -240,7 +240,7 @@ impl Widget for Transcript {
             self.out.push(msg);
         } else if stale {
             // No action, but the screen's own description moved: a note was written, or the first
-            // character arrived in the composer and the bar has an "Enviar" to draw now.
+            // character arrived in the composer and the bar has an Enviar to draw now.
             self.out.push(Msg::ViewStale);
         }
         handled

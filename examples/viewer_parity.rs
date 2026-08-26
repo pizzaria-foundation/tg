@@ -103,7 +103,15 @@ fn viewer_for(scene: &Scene, theme: &Theme<'_>) -> Viewer {
 
 /// The shipping screen: chrome and image in one call.
 fn render_by_hand(c: &mut Canvas<'_>, scene: &Scene, theme: &Theme<'_>) {
-    viewer_for(scene, theme).draw(c, theme, "Foto", "Voltar");
+    // From the tables, because the declared side reads them: a harness that spelled the
+    // words would compare the screen against a language rather than against itself, and
+    // would start failing the day the phone was set to the other one.
+    viewer_for(scene, theme).draw(
+        c,
+        theme,
+        tg::strings::media_photo(),
+        symbian_ui::strings::back(),
+    );
 }
 
 /// The declarative screen, through the real layout pass.

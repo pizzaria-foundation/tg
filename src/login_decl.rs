@@ -61,7 +61,7 @@ pub enum Msg {
     /// The middle key: send the code, submit the code, submit the password — whichever screen this
     /// is. One variant rather than three, because the screen already says which.
     Submit,
-    /// Back to the phone number: the code screen's "Voltar", and the waiting screen's "Cancelar".
+    /// Back to the phone number: the code screen's Voltar, and the waiting screen's "Cancelar".
     BackToPhone,
     /// Show or hide the password.
     ToggleMask,
@@ -155,7 +155,7 @@ pub fn view(
     let m = metrics();
     let detail = match &state.which {
         Which::Phone { .. } => "entrar",
-        Which::Code { .. } => "código",
+        Which::Code { .. } => crate::strings::code(),
         Which::Password { .. } => "senha",
         Which::Waiting(msg) => msg.as_str(),
     };
@@ -174,8 +174,8 @@ pub fn view(
     }
 
     let (title, prefix, placeholder) = match &state.which {
-        Which::Phone { .. } => ("Número de telefone", Some("+"), "11 999999999"),
-        Which::Code { .. } => ("Código", None, "código"),
+        Which::Phone { .. } => (crate::strings::phone_number(), Some("+"), "11 999999999"),
+        Which::Code { .. } => (crate::strings::code_field(), None, crate::strings::code()),
         Which::Password { .. } => ("Senha de dois fatores", None, "senha"),
         Which::Waiting(_) => unreachable!("handled above"),
     };
@@ -349,10 +349,10 @@ fn hint(which: &Which) -> Option<String> {
         Which::Code { length: Some(n) } => {
             let mut s = String::from("Digite os ");
             s.push_str(&crate::login::itoa(*n as u32));
-            s.push_str(" dígitos");
+            s.push_str(crate::strings::digits_suffix());
             Some(s)
         }
-        Which::Code { length: None } => Some(String::from("Digite o código enviado por SMS")),
+        Which::Code { length: None } => Some(String::from(crate::strings::enter_sms_code())),
         Which::Password { hint, .. } if !hint.is_empty() => Some(hint.clone()),
         _ => None,
     }
@@ -367,18 +367,18 @@ fn hint(which: &Which) -> Option<String> {
 pub fn softkeys(state: &State) -> Softkeys<Msg> {
     let bar = Softkeys::new();
     match &state.which {
-        Which::Waiting(_) => bar.back("Cancelar", Msg::BackToPhone),
+        Which::Waiting(_) => bar.back(symbian_ui::strings::cancel(), Msg::BackToPhone),
         Which::Phone { credentials_missing } => {
             if *credentials_missing || !state.connected {
                 bar
             } else {
-                bar.action("Avançar", Msg::Submit)
+                bar.action(crate::strings::next(), Msg::Submit)
             }
         }
         Which::Code { .. } => {
-            let bar = bar.options("Voltar", Msg::BackToPhone);
+            let bar = bar.options(symbian_ui::strings::back(), Msg::BackToPhone);
             if state.connected {
-                bar.action("Entrar", Msg::Submit)
+                bar.action(crate::strings::sign_in(), Msg::Submit)
             } else {
                 bar
             }
@@ -388,7 +388,7 @@ pub fn softkeys(state: &State) -> Softkeys<Msg> {
             // is a verb.
             let bar = bar.options(if *masked { "Mostrar" } else { "Ocultar" }, Msg::ToggleMask);
             if state.connected {
-                bar.action("Entrar", Msg::Submit)
+                bar.action(crate::strings::sign_in(), Msg::Submit)
             } else {
                 bar
             }

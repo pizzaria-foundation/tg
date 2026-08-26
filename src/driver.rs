@@ -1,7 +1,7 @@
 //! The piece between the login screens and the wire.
 //!
 //! `login.rs` knows what to draw. `link.rs` knows how to reach Telegram. Neither owned the
-//! other, so pressing "Avançar" produced a `Progress::Call { body, tag }` that was dropped
+//! other, so pressing Avançar produced a `Progress::Call { body, tag }` that was dropped
 //! on the floor — the screens typed and nothing was ever sent.
 //!
 //! # Everything is one tick
@@ -603,7 +603,7 @@ impl Driver {
         symbian::log!("[net] local unix time={}", symbian::unix_time());
         let up = symbian::net::connections_up().unwrap_or(0);
         symbian::log!("[net] connections already up={up}");
-        self.status = if up == 0 { "procure o diálogo de conexão" } else { "conectando" };
+        self.status = if up == 0 { crate::strings::look_for_the_dialog() } else { "conectando" };
         match Link::start() {
             Ok(l) => {
                 symbian::log!("[net] attached dc={}", l.dc());
@@ -613,7 +613,7 @@ impl Driver {
             }
             Err(e) => {
                 symbian::log!("[net] connect failed code={} err={e:?}", e.code());
-                Outcome::Disconnected("sem conexão de rede")
+                Outcome::Disconnected(crate::strings::no_network())
             }
         }
     }
@@ -790,11 +790,11 @@ impl Driver {
             // promising something is happening.
             if !self.may_rebuild_link() {
                 symbian::log!("[rpc] stuck, and not rebuilding from {:?}", self.activity);
-                return Outcome::Disconnected("sem conexão");
+                return Outcome::Disconnected(crate::strings::no_connection());
             }
             if self.retries >= 3 {
                 symbian::log!("[rpc] giving up after three stuck calls");
-                return Outcome::Disconnected("o servidor não respondeu");
+                return Outcome::Disconnected(crate::strings::server_did_not_answer());
             }
             self.retries += 1;
             return self.connect();
@@ -994,7 +994,7 @@ impl Driver {
             let mut x = [0u8; 32];
             x.copy_from_slice(&bytes);
             let Some(l) = self.link.as_mut() else {
-                return Outcome::Disconnected("sem conexão");
+                return Outcome::Disconnected(crate::strings::no_connection());
             };
             login.on_kdf(x, l.rng_mut())
         } else {
@@ -1026,7 +1026,7 @@ impl Driver {
                     // The link died earlier and the log went quiet from that point, which
                     // reads as the app doing nothing rather than as a dead connection.
                     symbian::log!("[rpc] call with no link tag={tag}");
-                    return Outcome::Disconnected("sem conexão");
+                    return Outcome::Disconnected(crate::strings::no_connection());
                 };
                 symbian::log!("[rpc] call tag={tag}");
                 if !l.call(&body, tag, now) {
@@ -1060,10 +1060,10 @@ impl Driver {
                 self.persisted = false;
                 let phone = String::from(login.phone());
                 let Some(l) = self.link.as_mut() else {
-                    return Outcome::Disconnected("sem conexão");
+                    return Outcome::Disconnected(crate::strings::no_connection());
                 };
                 if l.migrate(dc).is_err() {
-                    return Outcome::Disconnected("não consegui mudar de servidor");
+                    return Outcome::Disconnected(crate::strings::could_not_switch_server());
                 }
                 self.status = "mudando de servidor";
                 // The code is asked for again once the new handshake finishes. Sending it
@@ -1143,7 +1143,7 @@ impl Driver {
                 self.queued = Some(w);
             } else {
                 // Not recoverable by waiting, so it is reported rather than retried.
-                self.status = "não consegui calcular a chave";
+                self.status = crate::strings::could_not_compute_key();
             }
         }
     }
@@ -1181,7 +1181,7 @@ mod tests {
         assert_eq!(d.apply(LoginProgress::None, &mut login, 0), Outcome::Redraw);
         assert_eq!(
             d.apply(LoginProgress::Call { body: alloc::vec![1], tag: 1 }, &mut login, 0),
-            Outcome::Disconnected("sem conexão")
+            Outcome::Disconnected(crate::strings::no_connection())
         );
         assert!(!d.is_connected());
     }

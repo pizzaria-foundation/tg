@@ -365,12 +365,14 @@ impl Chat {
             return &m.text;
         }
         match &m.media {
-            Some(Media::Photo { .. }) => "Foto",
+            Some(Media::Photo { .. }) => crate::strings::media_photo(),
+            // Not in the table: "Sticker" is the same word in both languages, and an entry whose two
+            // halves are identical is exactly what the copy check in `strings.rs` exists to reject.
             Some(Media::Sticker { .. }) => "Sticker",
-            Some(Media::Voice { .. }) => "Mensagem de voz",
-            Some(Media::Audio { .. }) => "Audio",
-            Some(Media::File { .. }) => "Arquivo",
-            Some(Media::Unknown) => "Midia",
+            Some(Media::Voice { .. }) => crate::strings::media_voice(),
+            Some(Media::Audio { .. }) => crate::strings::media_audio(),
+            Some(Media::File { .. }) => crate::strings::media_file(),
+            Some(Media::Unknown) => crate::strings::media_other(),
             None => "",
         }
     }
@@ -1507,13 +1509,13 @@ mod tests {
     fn a_media_only_chat_says_what_the_attachment_is() {
         // It used to return "" — a row with a name, a time and nothing between them, which
         // reads as a broken list rather than as "someone sent you a photo".
-        assert_eq!(with_last("", Some(photo(0))).preview(), "Foto");
+        assert_eq!(with_last("", Some(photo(0))).preview(), crate::strings::media_photo());
         assert_eq!(
             with_last("", Some(Media::Voice {
                 id: 1, access_hash: 0, file_reference: Vec::new(), dc_id: 2,
                 duration: 7, waveform: None, size: 0,
             })).preview(),
-            "Mensagem de voz"
+            crate::strings::media_voice()
         );
         assert_eq!(
             with_last("", Some(Media::Sticker {

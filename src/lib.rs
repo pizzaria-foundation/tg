@@ -12,6 +12,7 @@ extern crate alloc;
 
 pub mod driver;
 pub mod link;
+pub mod strings;
 pub mod login;
 /// The login screens described declaratively, beside the hand-written ones. See the module header.
 pub mod login_decl;
@@ -496,7 +497,7 @@ impl App {
         }
     }
 
-    /// The code screen's "Voltar", and the waiting screen's "Cancelar".
+    /// The code screen's Voltar, and the waiting screen's "Cancelar".
     ///
     /// "Cancelar" does not cancel the request in flight — this client has no path from a screen down
     /// to the socket — it moves back to the phone number so the user is not left watching a spinner.

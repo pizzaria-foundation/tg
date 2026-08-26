@@ -514,14 +514,14 @@ impl Link {
                     Ok(s) => s,
                     Err(e) => {
                         self.note("socket open failed", Note::Num(e.code() as i64));
-                        return self.die("não consegui abrir o socket");
+                        return self.die(crate::strings::could_not_open_socket());
                     }
                 };
                 let addr = dc_address(self.dc);
                 self.note("connecting to dc", Note::Num(self.dc as i64));
                 if let Err(e) = sock.connect(&mut self.net, addr, DC_PORT) {
                     self.note("connect failed", Note::Num(e.code() as i64));
-                    return self.die("não consegui alcançar o servidor");
+                    return self.die(crate::strings::could_not_reach_server());
                 }
                 self.sock = Some(sock);
                 self.phase = Phase::Connecting;
@@ -529,7 +529,7 @@ impl Link {
             }
             Err(e) => {
                 self.note("bearer failed", Note::Num(e.code() as i64));
-                self.die("sem conexão de rede")
+                self.die(crate::strings::no_network())
             }
         }
     }
@@ -696,7 +696,7 @@ impl Link {
                         }
                         Err(e) => {
                             self.note("bearer retry failed", Note::Num(e.code() as i64));
-                            return self.die("sem conexão de rede");
+                            return self.die(crate::strings::no_network());
                         }
                     }
                 }
@@ -799,12 +799,12 @@ impl Link {
                 // resending into it is an infinite loop that shows a reassuring status line
                 // while nothing progresses — which is exactly what it did.
                 if self.clock_fixed {
-                    return Some(self.die("o relógio do telefone está muito errado"));
+                    return Some(self.die(crate::strings::clock_is_wrong()));
                 }
                 self.clock_fixed = true;
 
                 if !self.client.correct_time() {
-                    return Some(self.die("o relógio do telefone está muito errado"));
+                    return Some(self.die(crate::strings::clock_is_wrong()));
                 }
                 self.note("clock corrected to", Note::Num(self.client.server_clock() as i64));
                 // Straight to disk. The stored session carries the offset, and a resumed
@@ -827,7 +827,7 @@ impl Link {
                     }
                     // Anything else means the client would not build the request again, and
                     // silently doing nothing is what makes a status line lie.
-                    _ => return Some(self.die("não consegui reenviar depois de ajustar o relógio")),
+                    _ => return Some(self.die(crate::strings::could_not_resend_after_clock())),
                 }
                 Some(Progress::Step("relogio ajustado"))
             }
@@ -843,7 +843,7 @@ impl Link {
     fn resend_last(&mut self, unix_time: i64) -> Option<Progress> {
         let (body, tag) = self.last_call.clone()?;
         if self.resends >= 3 {
-            return Some(self.die("o servidor recusou o pedido várias vezes"));
+            return Some(self.die(crate::strings::server_refused_repeatedly()));
         }
         self.resends += 1;
         self.note("resending, tag", Note::Num(tag as i64));
@@ -854,7 +854,7 @@ impl Link {
                 }
                 None
             }
-            _ => Some(self.die("não consegui reenviar o pedido")),
+            _ => Some(self.die(crate::strings::could_not_resend())),
         }
     }
 
@@ -892,23 +892,23 @@ fn describe(e: &tg_proto::client::Error) -> &'static str {
     use tg_proto::handshake::Error as H;
     match e {
         E::Transport(_) => "erro de enquadramento",
-        E::Session(_) => "não consegui decifrar",
-        E::Rpc(_) => "resposta ilegível",
-        E::NotReady => "ainda não conectado",
+        E::Session(_) => crate::strings::could_not_decrypt(),
+        E::Rpc(_) => crate::strings::unreadable_response(),
+        E::NotReady => crate::strings::not_connected_yet(),
         E::Server(c) if *c == -404 => "o servidor esqueceu a chave",
         E::Server(_) => "o servidor recusou",
         E::Handshake(h) => match h {
-            H::Tl(_) => "handshake: TL ilegível",
+            H::Tl(_) => crate::strings::handshake_unreadable_tl(),
             H::Crypto(_) => "handshake: falha de cripto",
             H::OutOfOrder => "handshake: resposta fora de ordem",
-            H::NonceMismatch => "handshake: nonce não confere",
-            H::NotFactorable(_) => "handshake: não fatorei o pq",
+            H::NonceMismatch => crate::strings::handshake_nonce_mismatch(),
+            H::NotFactorable(_) => crate::strings::handshake_no_factor(),
             H::NoUsableKey => "handshake: nenhuma chave RSA nossa",
             H::ServerRejected => "handshake: servidor recusou os dados",
             H::UnknownDhPrime => "handshake: primo DH desconhecido",
-            H::BadDhParams => "handshake: parâmetros DH inválidos",
-            H::DhGenFailed => "handshake: geração da chave falhou",
-            H::KeyMismatch => "handshake: as chaves não batem",
+            H::BadDhParams => crate::strings::handshake_bad_dh(),
+            H::DhGenFailed => crate::strings::handshake_key_failed(),
+            H::KeyMismatch => crate::strings::handshake_keys_differ(),
         },
     }
 }
